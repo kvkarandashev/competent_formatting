@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools >= 61.0"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "competent_formatting"
+version = "0.1.0"
+authors=[
+ {name="Konstantin Karandashev"},
+]
+description="For conveniently making competent tables and figures"
+readme="README.md"
+license={text="GPL-3.0 license"}
+[tool.setuptools]
+packages=["competent_formatting"]
