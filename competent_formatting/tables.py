@@ -1,4 +1,4 @@
-from .number_formatting import LaTeXScientific
+from .number_formatting import LaTeXInteger, LaTeXPlainFloat, LaTeXScientific, isfloat, isint
 
 phantom = "\\phantom{\\_}"
 
@@ -21,7 +21,6 @@ class MultiColumn:
             + "}{"
             + self.element
             + "}"
-            + cell_split * (self.ncolumns - 1)
         )
 
 
@@ -70,21 +69,32 @@ def table_transpose(table):
 def latex_table_open_element_string(
     el,
     float_formatter=LaTeXScientific(),
+    int_formatter=LaTeXInteger(),
     preexp_minus=False,
     max_num_power_numerals=None,
     exp_minus=False,
+    max_num_int_numerals=None,
+    max_num_float_numerals=None,
+    float_minus=False,
+    int_minus=False,
 ):
     if el is None:
         return ""
     if type(el) in [MultiRow, MultiColumn]:
         return el.closed_elements_string()
-    if isinstance(el, float):
-        return float_formatter(
-            el,
-            preexp_minus=preexp_minus,
-            max_num_power_numerals=max_num_power_numerals,
-            exp_minus=exp_minus,
-        )
+    if isfloat(el):
+        if isinstance(float_formatter, LaTeXScientific):
+            return float_formatter(
+                el,
+                preexp_minus=preexp_minus,
+                max_num_power_numerals=max_num_power_numerals,
+                exp_minus=exp_minus,
+            )
+        elif isinstance(float_formatter, LaTeXPlainFloat):
+            return float_formatter(el, minus=float_minus, max_num_numerals=max_num_float_numerals)
+        raise Exception
+    if isint(el):
+        return int_formatter(el, minus=int_minus, max_num_numerals=max_num_int_numerals)
     return str(el)
 
 
@@ -98,9 +108,24 @@ def row_width(row):
     return width
 
 
-def update_alignment_kwargs(alignment_kwargs, element, float_formatter=LaTeXScientific()):
-    if not isinstance(element, float):
-        return alignment_kwargs
+def update_plain_float_alignment_kwargs(
+    alignment_kwargs, element, float_formatter=LaTeXPlainFloat()
+):
+    if element < 0:
+        alignment_kwargs["float_minus"] = True
+
+    maxnpn_key = "max_num_float_numerals"
+    num_numerals = float_formatter.get_num_numerals(element)
+    if (maxnpn_key not in alignment_kwargs) or (alignment_kwargs[maxnpn_key] < num_numerals):
+        alignment_kwargs[maxnpn_key] = num_numerals
+    return alignment_kwargs
+
+
+def update_float_alignment_kwargs(alignment_kwargs, element, float_formatter=LaTeXScientific()):
+    if isinstance(float_formatter, LaTeXPlainFloat):
+        return update_plain_float_alignment_kwargs(
+            alignment_kwargs, element, float_formatter=float_formatter
+        )
     if element < 0:
         alignment_kwargs["preexp_minus"] = True
     _, exp_int = float_formatter.get_prefactor_exp_parts(element)
@@ -115,6 +140,28 @@ def update_alignment_kwargs(alignment_kwargs, element, float_formatter=LaTeXScie
     return alignment_kwargs
 
 
+def update_int_alignment_kwargs(alignment_kwargs, element, int_formatter=LaTeXInteger()):
+    if element < 0:
+        alignment_kwargs["int_minus"] = True
+    maxnpn_key = "max_num_int_numerals"
+    num_numerals = int_formatter.get_num_numerals(element)
+    if (maxnpn_key not in alignment_kwargs) or (alignment_kwargs[maxnpn_key] < num_numerals):
+        alignment_kwargs[maxnpn_key] = num_numerals
+    return alignment_kwargs
+
+
+def update_alignment_kwargs(
+    alignment_kwargs, element, float_formatter=LaTeXScientific(), int_formatter=LaTeXInteger()
+):
+    if isfloat(element):
+        return update_float_alignment_kwargs(
+            alignment_kwargs, element, float_formatter=float_formatter
+        )
+    if isint(element):
+        return update_int_alignment_kwargs(alignment_kwargs, element, int_formatter=int_formatter)
+    return alignment_kwargs
+
+
 def latex_table(
     table,
     transposed=False,
@@ -123,6 +170,7 @@ def latex_table(
     bottomrule=True,
     cline_positions={},
     float_formatter=LaTeXScientific(),
+    int_formatter=LaTeXInteger(),
     column_definitions=None,
 ):
     # dim check
@@ -142,7 +190,10 @@ def latex_table(
         col_id = 0
         for el in row:
             alignment_kwargs_list[col_id] = update_alignment_kwargs(
-                alignment_kwargs_list[col_id], el, float_formatter=float_formatter
+                alignment_kwargs_list[col_id],
+                el,
+                float_formatter=float_formatter,
+                int_formatter=int_formatter,
             )
             if isinstance(el, MultiColumn):
                 col_id += el.ncolumns

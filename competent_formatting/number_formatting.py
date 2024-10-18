@@ -1,3 +1,5 @@
+import numpy as np
+
 from .misc import phantom_string
 
 pzero = phantom_string(0)
@@ -19,12 +21,18 @@ def padded_number_string(s, minus=False, max_num_symbols=None, pad_beginning=Tru
     return s
 
 
+def isfloat(value):
+    return (type(value) in [float, np.float64]) or (
+        isinstance(value, np.ndarray) and value.dtype == np.float64
+    )
+
+
 class LaTeXScientific:
     def __init__(self, num_numerals=1):
-        self.init_format_spring = "{:0." + str(num_numerals) + "e}"
+        self.init_format_string = "{:0." + str(num_numerals) + "e}"
 
     def get_prefactor_exp_parts(self, number_in):
-        def_sci = self.init_format_spring.format(number_in)
+        def_sci = self.init_format_string.format(number_in)
         parts = def_sci.split("e")
         return parts[0], int(parts[1])
 
@@ -39,7 +47,7 @@ class LaTeXScientific:
 
         if not (no_exp_needed and (max_num_power_numerals is None)):
             exp_part = (
-                "\\cdot 10^{"
+                "{ \\cdot } 10^{"
                 + padded_number_string(
                     str(exp_int),
                     minus=exp_minus,
@@ -52,3 +60,36 @@ class LaTeXScientific:
                 exp_part = phantom_string(exp_part)
             output += exp_part
         return r"$" + output + "$"
+
+
+class LaTeXPlainFloat:
+    def __init__(self, num_decimals=1):
+        self.init_format_string = "{:0." + str(num_decimals) + "f}"
+
+    def get_num_numerals(self, number_in):
+        return len(self.init_format_string.format(number_in))
+
+    def __call__(self, number_in, minus=False, max_num_numerals=None):
+        s = self.init_format_string.format(number_in)
+        return r"$" + padded_number_string(s, minus=minus, max_num_symbols=max_num_numerals) + "$"
+
+
+def isint(value):
+    return (type(value) in [int, np.int64]) or (
+        isinstance(value, np.ndarray) and value.dtype == np.int64
+    )
+
+
+class LaTeXInteger:
+    def __init__(self):
+        pass
+
+    def get_num_numerals(self, number_in):
+        return len(str(number_in))
+
+    def __call__(self, number_in, minus=False, max_num_numerals=None):
+        return (
+            r"$"
+            + padded_number_string(str(number_in), minus=minus, max_num_symbols=max_num_numerals)
+            + "$"
+        )
