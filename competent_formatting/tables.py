@@ -67,13 +67,24 @@ def table_transpose(table):
     return transposed_table
 
 
-def latex_table_open_element_string(el, float_formatter=LaTeXScientific()):
+def latex_table_open_element_string(
+    el,
+    float_formatter=LaTeXScientific(),
+    preexp_minus=False,
+    max_num_power_numerals=None,
+    exp_minus=False,
+):
     if el is None:
         return ""
     if type(el) in [MultiRow, MultiColumn]:
         return el.closed_elements_string()
     if isinstance(el, float):
-        return float_formatter(el)
+        return float_formatter(
+            el,
+            preexp_minus=preexp_minus,
+            max_num_power_numerals=max_num_power_numerals,
+            exp_minus=exp_minus,
+        )
     return str(el)
 
 
@@ -85,6 +96,23 @@ def row_width(row):
         else:
             width += 1
     return width
+
+
+def update_alignment_kwargs(alignment_kwargs, element, float_formatter=LaTeXScientific()):
+    if not isinstance(element, float):
+        return alignment_kwargs
+    if element < 0:
+        alignment_kwargs["preexp_minus"] = True
+    _, exp_int = float_formatter.get_prefactor_exp_parts(element)
+
+    num_power_numerals = len(str(exp_int))
+    if exp_int < 0:
+        alignment_kwargs["exp_minus"] = True
+        num_power_numerals -= 1
+    maxnpn_key = "max_num_power_numerals"
+    if (maxnpn_key not in alignment_kwargs) or (alignment_kwargs[maxnpn_key] < num_power_numerals):
+        alignment_kwargs[maxnpn_key] = num_power_numerals
+    return alignment_kwargs
 
 
 def latex_table(
@@ -107,6 +135,20 @@ def latex_table(
         table = table_transpose(table)
     if column_definitions is None:
         column_definitions = default_column_alignment * width
+
+    # First check all arguments needed with alignment.
+    alignment_kwargs_list = [{} for _ in range(width)]
+    for row in table:
+        col_id = 0
+        for el in row:
+            alignment_kwargs_list[col_id] = update_alignment_kwargs(
+                alignment_kwargs_list[col_id], el, float_formatter=float_formatter
+            )
+            if isinstance(el, MultiColumn):
+                col_id += el.ncolumns
+            else:
+                col_id += 1
+
     output = "\\begin{tabular}{" + column_definitions + "}\n"
     if toprule:
         output += "\\toprule\n"
@@ -117,13 +159,20 @@ def latex_table(
             cur_cline_positions = cline_positions[row_id]
             for cline_position in cur_cline_positions:
                 output += "\\cline{" + str(cline_position[0]) + "-" + str(cline_position[1]) + "}"
+        col_id = 0
         for el in row:
             output += (
                 " "
-                + latex_table_open_element_string(el, float_formatter=float_formatter)
+                + latex_table_open_element_string(
+                    el, float_formatter=float_formatter, **alignment_kwargs_list[col_id]
+                )
                 + cell_split
             )
-        output = output[:-1] + "\n"
+            if isinstance(el, MultiColumn):
+                col_id += el.ncolumns
+            else:
+                col_id += 1
+        output = output[:-1] + "\\\\\n"
     if bottomrule:
         output += "\\bottomrule\n"
     output += "\\end{tabular}\n"
