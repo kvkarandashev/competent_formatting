@@ -1,8 +1,9 @@
+from .misc import LaTeX_table_newline
 from .number_formatting import LaTeXInteger, LaTeXPlainFloat, LaTeXScientific, isfloat, isint
 
 phantom = "\\phantom{\\_}"
 
-default_column_alignment = "c"
+default_column_type = "c"
 
 cell_split = " &"
 
@@ -12,15 +13,9 @@ class MultiColumn:
         self.element = element
         self.ncolumns = ncolumns
 
-    def closed_elements_string(self, column_alignment=default_column_alignment):
+    def closed_elements_string(self, column_type=default_column_type):
         return (
-            "\\multicolumn{"
-            + str(self.ncolumns)
-            + "}{"
-            + column_alignment
-            + "}{"
-            + self.element
-            + "}"
+            "\\multicolumn{" + str(self.ncolumns) + "}{" + column_type + "}{" + self.element + "}"
         )
 
 
@@ -31,6 +26,21 @@ class MultiRow:
 
     def closed_elements_string(self):
         return "\\multirow{" + str(self.nrows) + "}{*}{" + self.element + "}"
+
+
+# Credit: https://tex.stackexchange.com/a/19678
+def cell_wlinebreaks(lines, vertical_alignment="t", horizontal_alignment="c"):
+    if len(lines) == 1:
+        return lines[0]
+    return (
+        "\\begin{tabular}["
+        + vertical_alignment
+        + "]{@{}"
+        + horizontal_alignment
+        + "@{}}"
+        + LaTeX_table_newline.join(lines)
+        + "\\end{tabular}"
+    )
 
 
 def phantom_list(nphantoms):
@@ -171,7 +181,7 @@ def latex_table(
     cline_positions={},
     float_formatter=LaTeXScientific(),
     int_formatter=LaTeXInteger(),
-    column_definitions=None,
+    column_types=None,
 ):
     # dim check
     width = row_width(table[0])
@@ -181,8 +191,8 @@ def latex_table(
     if transposed:
         width = len(table)
         table = table_transpose(table)
-    if column_definitions is None:
-        column_definitions = default_column_alignment * width
+    if column_types is None:
+        column_types = default_column_type * width
 
     # First check all arguments needed with alignment.
     alignment_kwargs_list = [{} for _ in range(width)]
@@ -200,7 +210,7 @@ def latex_table(
             else:
                 col_id += 1
 
-    output = "\\begin{tabular}{" + column_definitions + "}\n"
+    output = "\\begin{tabular}{" + column_types + "}\n"
     if toprule:
         output += "\\toprule\n"
     for row_id, row in enumerate(table):
