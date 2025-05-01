@@ -1,2 +1,2 @@
 from .LaTeX_formats import LaTeXInteger, LaTeXPlainFloat, LaTeXScientific
-from .utils import isfloat, isint
+from .utils import get_floatwerror_mean, isfloat, isfloatwerr, isint

@@ -1,24 +1,17 @@
 # K.Karan.: I am still not %100 decided whether using error_roundup is a good idea.
 
 from .utils import (
+    FloatWError,
     brackets_enclosure,
     error_roundup,
     inline_formula,
+    isfloatwerr,
     padded_number_string,
     phantom_string,
     pm_error,
     pminus,
     shift_decimal,
 )
-
-
-# K.Karan.: I originally considered just parsing tuples instead of FloatWError, but decided to introduce the class in case additions are needed.
-class FloatWError:
-    def __init__(self, mean_val, stat_err=None):
-        self.mean_val = mean_val
-        self.stat_err = stat_err
-        if stat_err is not None:
-            assert stat_err > 0
 
 
 class LaTeXNumber:
@@ -42,7 +35,7 @@ class LaTeXFloat(LaTeXNumber):
         pass
 
     def get_formatted_number(self, number_in, werrs_present=False, **kwargs):
-        if isinstance(number_in, tuple):
+        if isfloatwerr(number_in):
             number_in = FloatWError(mean_val=number_in[0], stat_err=number_in[1])
         elif werrs_present and (not isinstance(number_in, FloatWError)):
             number_in = FloatWError(mean_val=number_in, stat_err=None)
@@ -146,18 +139,28 @@ class LaTeXPlainFloat(LaTeXFloat):
         self, number_in: FloatWError, minus=False, max_num_numerals=None
     ):
         mean_str = self.get_formatted_float(
-            number_in.mean_val, minus=minus, max_num_numerals=max_num_numerals
+            number_in.mean_val,
+            minus=minus,
+            max_num_numerals=max_num_numerals,
+            return_inline_formula=False,
         )
         err_str = self.get_formatted_float(
-            number_in.mean_val, minus=minus, max_num_numerals=max_num_numerals
+            number_in.stat_err,
+            minus=minus,
+            max_num_numerals=max_num_numerals,
+            return_inline_formula=False,
         )
-        return pm_error(mean_str, err_str)
+        s = pm_error(mean_str, err_str)
+        return inline_formula(s)
 
-    def get_formatted_float(self, number_in, minus=False, max_num_numerals=None):
+    def get_formatted_float(
+        self, number_in, minus=False, max_num_numerals=None, return_inline_formula=True
+    ):
         s = self.init_format_string.format(number_in)
-        return inline_formula(
-            padded_number_string(s, minus=minus, max_num_symbols=max_num_numerals)
-        )
+        s = padded_number_string(s, minus=minus, max_num_symbols=max_num_numerals)
+        if return_inline_formula:
+            s = inline_formula(s)
+        return s
 
 
 class LaTeXInteger(LaTeXNumber):

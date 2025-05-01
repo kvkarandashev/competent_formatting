@@ -1,5 +1,13 @@
 from .misc import LaTeX_table_newline
-from .number_formatting import LaTeXInteger, LaTeXPlainFloat, LaTeXScientific, isfloat, isint
+from .number_formatting import (
+    LaTeXInteger,
+    LaTeXPlainFloat,
+    LaTeXScientific,
+    get_floatwerror_mean,
+    isfloat,
+    isfloatwerr,
+    isint,
+)
 
 phantom = "\\phantom{\\_}"
 
@@ -92,7 +100,7 @@ def latex_table_open_element_string(
         return ""
     if type(el) in [MultiRow, MultiColumn]:
         return el.closed_elements_string()
-    if isfloat(el):
+    if isfloat(el) or isfloatwerr(el):
         if isinstance(float_formatter, LaTeXScientific):
             return float_formatter(
                 el,
@@ -166,6 +174,10 @@ def update_alignment_kwargs(
     if isfloat(element):
         return update_float_alignment_kwargs(
             alignment_kwargs, element, float_formatter=float_formatter
+        )
+    if isfloatwerr(element):
+        return update_float_alignment_kwargs(
+            alignment_kwargs, get_floatwerror_mean(element), float_formatter=float_formatter
         )
     if isint(element):
         return update_int_alignment_kwargs(alignment_kwargs, element, int_formatter=int_formatter)

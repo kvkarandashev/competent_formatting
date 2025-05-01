@@ -134,3 +134,22 @@ def brackets_enclosure(s, phantom=False, outside_left=0):
     else:
         bracketed = f"({inside_symbols})"
     return start_symbols + bracketed
+
+
+class FloatWError:
+    def __init__(self, mean_val, stat_err=None):
+        self.mean_val = mean_val
+        self.stat_err = stat_err
+        if stat_err is not None:
+            assert stat_err > 0
+
+
+def isfloatwerr(value):
+    return isinstance(value, tuple) or isinstance(value, list) or isinstance(value, FloatWError)
+
+
+def get_floatwerror_mean(value):
+    if isinstance(value, tuple) or isinstance(value, list):
+        return value[0]
+    assert isinstance(value, FloatWError)
+    return value.mean_val
