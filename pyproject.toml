@@ -12,4 +12,4 @@ description="For conveniently making competent tables and figures"
 readme="README.md"
 license={text="GPL-3.0 license"}
 [tool.setuptools]
-packages=["competent_formatting"]
+packages=["competent_formatting", "competent_formatting.number_formatting"]

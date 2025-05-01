@@ -25,6 +25,12 @@ dev-setup: dev-env ./.git/hooks/pre-commit
 review: dev-setup
 	pre-commit run --all-files
 
+test-env:
+	$(pip) install pytest
+
+test: test-env
+	$(python) -m pytest -rs ./tests/*
+
 install:
 	$(pip) install .
 
