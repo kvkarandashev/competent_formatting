@@ -39,7 +39,7 @@ class MultiRow:
         return "\\multirow{" + str(self.nrows) + "}{*}{" + self.element + "}"
 
     def _init_args(self):
-        return (self.element,), {"nrows": self.rows}
+        return (self.element,), {"nrows": self.nrows}
 
 
 # Credit: https://tex.stackexchange.com/a/19678
@@ -190,6 +190,13 @@ def update_alignment_kwargs(
     return alignment_kwargs
 
 
+def check_keys_integer(d: dict):
+    new_d = {}
+    for k, v in d.items():
+        new_d[int(k)] = v
+    return new_d
+
+
 def latex_table(
     table,
     transposed=False,
@@ -201,6 +208,8 @@ def latex_table(
     int_formatter=LaTeXInteger(),
     column_types=None,
 ):
+    # introduced after a hard-to-trace error caused by JSON packing dictionnary keys as strings
+    cline_positions = check_keys_integer(cline_positions)
     # dim check
     width = row_width(table[0])
     for i in range(1, len(table)):

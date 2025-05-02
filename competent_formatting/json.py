@@ -4,12 +4,15 @@ Introduced since it's better to maintain test benchmarks in *.json rather than *
 import json
 
 from .number_formatting import FloatWError, LaTeXInteger, LaTeXPlainFloat, LaTeXScientific
+from .tables import MultiColumn, MultiRow
 
 internal_name_dict = {
     LaTeXScientific: "__LaTeXScientific__",
     LaTeXInteger: "__LaTeXInteger__",
     LaTeXPlainFloat: "__LaTeXPlainFloat__",
     FloatWError: "__FloatWError__",
+    MultiRow: "__MultiRow__",
+    MultiColumn: "__MultiColumn__",
 }
 
 internal_class_dict = {}
@@ -23,7 +26,7 @@ def represents_internal_object(d):
     ks = list(d.keys())
     if len(ks) != 1:
         return False
-    return ks[0] in internal_name_dict
+    return ks[0] in internal_class_dict
 
 
 class ALFEncoder(json.JSONEncoder):
@@ -41,6 +44,7 @@ class ALFDecoder(json.JSONDecoder):
     def object_hook(self, d):
         if not represents_internal_object(d):
             return d
-        cls = internal_class_dict[d.keys()[0]]
-        val = d.vals()[0]
+
+        cls = internal_class_dict[list(d.keys())[0]]
+        val = list(d.values())[0]
         return cls(*val[0], **val[1])
