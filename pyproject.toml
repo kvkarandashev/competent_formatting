@@ -10,7 +10,7 @@ authors=[
 dependencies=["numpy"]
 description="For conveniently making competent tables and figures"
 readme="README.md"
-license={text="GPL-3.0 license"}
+license={text="MIT license"}
 [tool.setuptools]
 packages=["competent_formatting", "competent_formatting.bin", "competent_formatting.number_formatting", "competent_formatting.str_formatting"]
 [project.scripts]
