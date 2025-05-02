@@ -26,6 +26,9 @@ class LaTeXNumber:
             return number_in
         return self.get_formatted_number(number_in, **kwargs)
 
+    def _init_args(self):
+        return (), {}
+
 
 class LaTeXFloat(LaTeXNumber):
     def get_formatted_float(self, number_in, **kwargs):
@@ -48,6 +51,9 @@ class LaTeXScientific(LaTeXFloat):
     def __init__(self, num_numerals=1, error_roundup=False):
         self.num_numerals = num_numerals
         self.error_roundup = error_roundup
+
+    def _init_args(self):
+        return (), {"num_numerals": self.num_numerals, "error_roundup": self.error_roundup}
 
     def get_prefactor_exp_parts(self, number_in, num_numerals=None):
         if num_numerals is None:
@@ -134,7 +140,11 @@ class LaTeXScientific(LaTeXFloat):
 
 class LaTeXPlainFloat(LaTeXFloat):
     def __init__(self, num_decimals=1):
-        self.init_format_string = "{:0." + str(num_decimals) + "f}"
+        self.num_decimals = num_decimals
+        self.init_format_string = "{:0." + str(self.num_decimals) + "f}"
+
+    def _init_args(self):
+        return (), {"num_decimals": self.num_decimals}
 
     def get_num_numerals(self, number_in):
         return len(self.init_format_string.format(number_in))

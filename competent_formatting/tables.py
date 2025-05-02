@@ -26,6 +26,9 @@ class MultiColumn:
             "\\multicolumn{" + str(self.ncolumns) + "}{" + column_type + "}{" + self.element + "}"
         )
 
+    def _init_args(self):
+        return (self.element,), {"ncolumns": self.ncolumns}
+
 
 class MultiRow:
     def __init__(self, element, nrows=1):
@@ -34,6 +37,9 @@ class MultiRow:
 
     def closed_elements_string(self):
         return "\\multirow{" + str(self.nrows) + "}{*}{" + self.element + "}"
+
+    def _init_args(self):
+        return (self.element,), {"nrows": self.rows}
 
 
 # Credit: https://tex.stackexchange.com/a/19678
