@@ -99,12 +99,16 @@ class LaTeXScientific(LaTeXFloat):
         prefactor = shift_decimal(prefactor, exp_init - final_exp)
         error_prefactor = shift_decimal(error_prefactor, exp_error - final_exp)
 
+        final_prefactor_format = "{:0." + str(self.num_numerals) + "f}"
+        prefactor = final_prefactor_format.format(float(prefactor))
+        error_prefactor = final_prefactor_format.format(float(error_prefactor))
+
         if number_in.mean_val < 0:
             bracket_kwargs = {"outside_left": 1}
         else:
             bracket_kwargs = {}
 
-        exp_needed = final_exp == 0
+        exp_needed = final_exp != 0
         output = pm_error(prefactor, error_prefactor)
         output = brackets_enclosure(output, phantom=(not exp_needed), **bracket_kwargs)
         if preexp_minus and (number_in.mean_val > 0):
@@ -112,7 +116,7 @@ class LaTeXScientific(LaTeXFloat):
         output += self.get_exp_part(
             final_exp, max_num_power_numerals=max_num_power_numerals, exp_minus=exp_minus
         )
-        return output
+        return inline_formula(output)
 
     def get_formatted_float(
         self, number_in, preexp_minus=False, max_num_power_numerals=None, exp_minus=False

@@ -1,4 +1,3 @@
-from .misc import LaTeX_table_newline
 from .number_formatting import (
     LaTeXInteger,
     LaTeXPlainFloat,
@@ -8,6 +7,7 @@ from .number_formatting import (
     isfloatwerr,
     isint,
 )
+from .str_formatting import LaTeX_table_newline
 
 phantom = "\\phantom{\\_}"
 

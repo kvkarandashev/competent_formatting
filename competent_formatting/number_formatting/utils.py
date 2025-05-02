@@ -1,6 +1,6 @@
 import numpy as np
 
-from ..misc import phantom_string
+from ..str_formatting import phantom_string
 
 pzero = phantom_string(0)
 pminus = phantom_string("-")
@@ -104,7 +104,7 @@ def shift_decimal(str_rep_in, shift_num):
     else:
         num_transferred_numerals = min(len(prefac_part), -shift_num)
         frac_part = prefac_part[-num_transferred_numerals:] + frac_part
-        prefac_part = prefac_part[-num_transferred_numerals]
+        prefac_part = prefac_part[:-num_transferred_numerals]
         if len(prefac_part) == 0:
             prefac_part = "0"
         if num_transferred_numerals != -shift_num:

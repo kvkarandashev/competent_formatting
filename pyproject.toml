@@ -12,4 +12,6 @@ description="For conveniently making competent tables and figures"
 readme="README.md"
 license={text="GPL-3.0 license"}
 [tool.setuptools]
-packages=["competent_formatting", "competent_formatting.number_formatting"]
+packages=["competent_formatting", "competent_formatting.bin", "competent_formatting.number_formatting", "competent_formatting.str_formatting"]
+[project.scripts]
+alf_quick_table_view="competent_formatting.bin.table_view:main"

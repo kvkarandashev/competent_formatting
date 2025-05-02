@@ -1,4 +1,4 @@
-from .misc import LaTeX_table_newline, special_LaTeX_symbols
+from .str_formatting import replace_special_LaTeX_symbols
 
 manysymbol_elements = ["He", "Li", "Be", "Na", "Mg", "Si", "Cl", "Br"]
 
@@ -41,16 +41,4 @@ def latex_SMILES(SMILES, linebreaks_freq=None):
             latex_SMILES(SMILES_line)
             for SMILES_line in SMILES_wlinebreaks(SMILES, linebreaks_freq)
         ]
-    output = ""
-    for el_id, el in enumerate(SMILES):
-        # add more "dangerous" symbols here as I recall them
-        if (
-            (el in special_LaTeX_symbols)
-            and (SMILES[el_id : el_id + 2] != LaTeX_table_newline)
-            and (SMILES[el_id - 1 : el_id + 1] != LaTeX_table_newline)
-        ):
-            add = special_LaTeX_symbols[el]
-        else:
-            add = el
-        output += add
-    return output
+    return replace_special_LaTeX_symbols(SMILES)
