@@ -4,7 +4,7 @@ def phantom_string(e):
 
 LaTeX_table_newline = "\\\\"
 
-special_LaTeX_symbols = {"#": "\\#", "\\": "{\\textbackslash}", "[": "{[}", "]": "{]}"}
+special_LaTeX_symbols = {"#": "\\#", "\\": "{\\textbackslash}", "[": "{[}", "]": "{]}", "_": "\\_"}
 # for why square brackets are dangerous see https://tex.stackexchange.com/a/34468
 
 
