@@ -9,7 +9,7 @@ pminus = phantom_string("-")
 def padded_number_string(s, minus=False, max_num_symbols=None, pad_beginning=True):
     pad_string = ""
     if minus:
-        if float(s) >= 0:
+        if s[0] != "-":
             pad_string = pminus
     if max_num_symbols is not None:
         pad_string = pzero * (max_num_symbols - len(s)) + pad_string
