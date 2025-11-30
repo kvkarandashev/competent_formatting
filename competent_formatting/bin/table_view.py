@@ -1,6 +1,7 @@
-import argparse
 import os
 import subprocess
+
+import click
 
 from ..str_formatting import replace_special_LaTeX_symbols
 
@@ -35,20 +36,17 @@ def wrap_table_into_test_tex(table_source_file, pdf_title, newcommands=""):
     return test_source
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("filename", type=str)
-    parser.add_argument("--replacements", type=str)
-    args = parser.parse_args()
-    filename = args.filename
-
+@click.command()
+@click.argument("filename")
+@click.option("--replacements", default=None)
+def main(filename, replacements):
     if not (len(filename) > 4 and (filename[:-4] != ".tex")):
         print("Tex filename must end with '.tex'!")
         quit()
 
     newcommands = ""
-    if args.replacements is not None:
-        for replacement in args.replacements.split(","):
+    if replacements is not None:
+        for replacement in replacements.split(","):
             r1, r2 = replacement.split(":")
             newcommands += "\\newcommand{" + r1 + "}{" + r2 + "}\n"
 

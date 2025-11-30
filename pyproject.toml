@@ -1,17 +1,31 @@
 [build-system]
-requires = ["setuptools >= 61.0"]
 build-backend = "setuptools.build_meta"
+requires = [ "setuptools>=61" ]
+
 [project]
-name = "competent_formatting"
+name = "competent-formatting"
 version = "0.1.0"
-authors=[
- {name="Konstantin Karandashev"},
+description = "For conveniently making competent tables and figures"
+readme = "README.md"
+license = { text = "MIT license" }
+authors = [
+  { name = "Konstantin Karandashev" },
 ]
-dependencies=["numpy"]
-description="For conveniently making competent tables and figures"
-readme="README.md"
-license={text="MIT license"}
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [ "click", "numpy" ]
+scripts.cf_quick_table_view = "competent_formatting.bin.table_view:main"
+
 [tool.setuptools]
-packages=["competent_formatting", "competent_formatting.bin", "competent_formatting.number_formatting", "competent_formatting.str_formatting"]
-[project.scripts]
-cf_quick_table_view="competent_formatting.bin.table_view:main"
+packages = [
+  "competent_formatting",
+  "competent_formatting.bin",
+  "competent_formatting.number_formatting",
+  "competent_formatting.str_formatting",
+]
