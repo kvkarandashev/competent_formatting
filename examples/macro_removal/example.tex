@@ -1,0 +1,33 @@
+% TeX comment
+\documentclass[12pt]{iopart}
+
+\expandafter\let\csname equation*\endcsname\relax
+\expandafter\let\csname endequation*\endcsname\relax
+
+\newcommand{\firstauthorcomment}[1]{#1}
+\newcommand{\secondauthorcomment}[1]{#1}
+\newcommand{\markingrevised}[1]{#1}
+\newcommand{\normalformatcommand}{Prefix -> \textbf{suffix}}
+
+\begin{document}
+
+\title[Short title]{Long title}
+
+\section{Best}
+
+Word1 \firstauthorcomment{question1} word1 \secondauthorcomment{question1}
+
+\color{RED}{Word2 \firstauthorcomment{question2} word2 \secondauthorcomment{question2} $ \mathrm{AB} * 2 $}
+
+\markingrevised{Word3 \firstauthorcomment{question3} word3 \secondauthorcomment{question3}}
+
+\begin{table}
+    \begin{tabular}[ccc]
+        1 & 3 \\
+        4 & 5 \\
+    \end{tabular}
+\end{table}
+
+\section*{References}
+
+\end{document}

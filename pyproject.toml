@@ -4,7 +4,7 @@ requires = [ "setuptools>=61" ]
 
 [project]
 name = "competent-formatting"
-version = "0.1.0"
+version = "0.1.1"
 description = "For conveniently making competent tables and figures"
 readme = "README.md"
 license = { text = "MIT license" }
@@ -19,7 +19,9 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
-dependencies = [ "click", "numpy" ]
+dependencies = [ "click", "numpy", "pylatexenc" ]
+scripts.cf_macro_removal = "competent_formatting.bin.macro_removal:main"
+
 scripts.cf_quick_table_view = "competent_formatting.bin.table_view:main"
 
 [tool.setuptools]
@@ -28,4 +30,5 @@ packages = [
   "competent_formatting.bin",
   "competent_formatting.number_formatting",
   "competent_formatting.str_formatting",
+  "competent_formatting.processing",
 ]
