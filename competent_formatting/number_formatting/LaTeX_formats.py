@@ -88,6 +88,30 @@ class LaTeXScientific(LaTeXFloat):
         exp_minus=False,
     ):
         prefactor, exp_init = self.get_prefactor_exp_parts(number_in.mean_val)
+        if number_in.stat_err is None:
+            # No error to show, but the column contains floats-with-errors: render the mean
+            # as usual and hide a same-width "\pm error" placeholder behind a phantom so the
+            # row stays aligned with the floats-with-errors in the same column.
+            final_exp = exp_init
+            final_prefactor_format = "{:0." + str(self.num_numerals) + "f}"
+            prefactor = final_prefactor_format.format(float(prefactor))
+            error_placeholder = final_prefactor_format.format(0.0)
+            if number_in.mean_val < 0:
+                bracket_kwargs = {"outside_left": 1}
+            else:
+                bracket_kwargs = {}
+            exp_needed = final_exp != 0
+            # The leading "{}" is a zero-width ordinary atom that keeps \pm classified as a
+            # binary operator inside the \phantom, so the placeholder reserves the same
+            # \medmuskip spacing (hence the same width) as a real "\pm error".
+            output = prefactor + phantom_string(pm_error("{}", error_placeholder))
+            output = brackets_enclosure(output, phantom=(not exp_needed), **bracket_kwargs)
+            if preexp_minus and (number_in.mean_val > 0):
+                output = pminus + output
+            output += self.get_exp_part(
+                final_exp, max_num_power_numerals=max_num_power_numerals, exp_minus=exp_minus
+            )
+            return inline_formula(output)
         err_num_numerals = self.num_numerals
         if self.error_roundup:
             err_num_numerals += 1
@@ -158,6 +182,20 @@ class LaTeXPlainFloat(LaTeXFloat):
             max_num_numerals=max_num_numerals,
             return_inline_formula=False,
         )
+        if number_in.stat_err is None:
+            # The value has no error, but it shares a column with floats that do. Reserve
+            # the exact horizontal space of the "\pm error" part with a phantom so the mean
+            # stays aligned with the floats-with-errors in the same column.
+            err_placeholder = self.get_formatted_float(
+                0.0,
+                minus=minus,
+                max_num_numerals=max_num_numerals,
+                return_inline_formula=False,
+            )
+            # The leading "{}" is a zero-width ordinary atom that keeps \pm classified as a
+            # binary operator inside the \phantom, so the placeholder reserves the same
+            # \medmuskip spacing (hence the same width) as a real "\pm error".
+            return inline_formula(mean_str + phantom_string(pm_error("{}", err_placeholder)))
         err_str = self.get_formatted_float(
             number_in.stat_err,
             minus=minus,

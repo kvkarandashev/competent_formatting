@@ -101,6 +101,7 @@ def latex_table_open_element_string(
     max_num_float_numerals=None,
     float_minus=False,
     int_minus=False,
+    werrs_present=False,
 ):
     if el is None:
         return ""
@@ -113,9 +114,15 @@ def latex_table_open_element_string(
                 preexp_minus=preexp_minus,
                 max_num_power_numerals=max_num_power_numerals,
                 exp_minus=exp_minus,
+                werrs_present=werrs_present,
             )
         elif isinstance(float_formatter, LaTeXPlainFloat):
-            return float_formatter(el, minus=float_minus, max_num_numerals=max_num_float_numerals)
+            return float_formatter(
+                el,
+                minus=float_minus,
+                max_num_numerals=max_num_float_numerals,
+                werrs_present=werrs_present,
+            )
         raise Exception
     if isint(el):
         return int_formatter(el, minus=int_minus, max_num_numerals=max_num_int_numerals)
@@ -182,9 +189,13 @@ def update_alignment_kwargs(
             alignment_kwargs, element, float_formatter=float_formatter
         )
     if isfloatwerr(element):
-        return update_float_alignment_kwargs(
+        alignment_kwargs = update_float_alignment_kwargs(
             alignment_kwargs, get_floatwerror_mean(element), float_formatter=float_formatter
         )
+        # Mark the column as containing floats with errors so that plain floats sharing
+        # the column are rendered with a phantom error, keeping every row aligned.
+        alignment_kwargs["werrs_present"] = True
+        return alignment_kwargs
     if isint(element):
         return update_int_alignment_kwargs(alignment_kwargs, element, int_formatter=int_formatter)
     return alignment_kwargs
