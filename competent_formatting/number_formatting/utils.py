@@ -141,7 +141,9 @@ class FloatWError:
         self.mean_val = mean_val
         self.stat_err = stat_err
         if stat_err is not None:
-            assert stat_err > 0
+            # A zero error is a legitimate value (e.g. measurements that coincide exactly);
+            # `None` is the sentinel for "no error", so only forbid genuinely negative errors.
+            assert stat_err >= 0
 
 
 def isfloatwerr(value):
