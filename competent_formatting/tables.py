@@ -1,3 +1,5 @@
+import string
+
 from .number_formatting import (
     LaTeXInteger,
     LaTeXPlainFloat,
@@ -14,6 +16,79 @@ phantom = "\\phantom{\\_}"
 default_column_type = "c"
 
 cell_split = " &"
+
+FOOTNOTE_TYPES = ("threeparttable", "multicolumn")
+
+
+def alpha_footnote_marker(index):
+    # 0 -> "a", 1 -> "b", ..., 25 -> "z", 26 -> "aa", 27 -> "ab", ...
+    marker = ""
+    index += 1
+    while index > 0:
+        index, remainder = divmod(index - 1, 26)
+        marker = string.ascii_lowercase[remainder] + marker
+    return marker
+
+
+class TableFootnotes:
+    """
+    Collects table footnotes and hands out the markers to splice into table cells.
+
+    `footnote_type` selects how `latex_table` renders the collected notes:
+        "threeparttable" - wraps the tabular in a threeparttable/tablenotes block; cell
+                           markers are "\\tnote{<marker>}" (needs \\usepackage{threeparttable}).
+        "multicolumn"    - appends the notes as full-width \\multicolumn rows inside the
+                           tabular; cell markers are superscripts "$^{<marker>}$".
+    If `check_footnote_repetition` is True, identical note texts are stored once and share
+    a single marker; if False, every occurrence is kept and gets a marker of its own.
+    """
+
+    def __init__(
+        self,
+        footnote_type="threeparttable",
+        check_footnote_repetition=True,
+        marker_func=alpha_footnote_marker,
+    ):
+        assert (
+            footnote_type in FOOTNOTE_TYPES
+        ), f"footnote_type must be one of {FOOTNOTE_TYPES}, got {footnote_type!r}"
+        self.footnote_type = footnote_type
+        self.check_footnote_repetition = check_footnote_repetition
+        self.marker_func = marker_func
+        self.texts = []  # note texts in the order their markers are assigned
+
+    def _register(self, text):
+        if self.check_footnote_repetition and (text in self.texts):
+            index = self.texts.index(text)
+        else:
+            index = len(self.texts)
+            self.texts.append(text)
+        return self.marker_func(index)
+
+    def cell_marker(self, notes):
+        """
+        Register one cell's footnote(s) and return the marker string to splice into the
+        cell (e.g. "\\tnote{a}" or "$^{a,c}$"); returns "" when there are no notes.
+        `notes` is a single text or a list of texts, kept in the given order.
+        """
+        if notes is None:
+            return ""
+        if isinstance(notes, str):
+            notes = [notes]
+        notes = [text for text in notes if text]
+        if not notes:
+            return ""
+        marker_str = ",".join(self._register(text) for text in notes)
+        if self.footnote_type == "threeparttable":
+            return "\\tnote{" + marker_str + "}"
+        return "$^{" + marker_str + "}$"
+
+    def items(self):
+        # (marker, text) pairs in marker-assignment order.
+        return [(self.marker_func(index), text) for index, text in enumerate(self.texts)]
+
+    def empty(self):
+        return len(self.texts) == 0
 
 
 class MultiColumn:
@@ -218,6 +293,7 @@ def latex_table(
     float_formatter=LaTeXScientific(),
     int_formatter=LaTeXInteger(),
     column_types=None,
+    footnotes=None,
 ):
     # introduced after a hard-to-trace error caused by JSON packing dictionnary keys as strings
     cline_positions = check_keys_integer(cline_positions)
@@ -274,5 +350,34 @@ def latex_table(
         output = output[:-1] + "\\\\\n"
     if bottomrule:
         output += "\\bottomrule\n"
+    # "multicolumn" footnotes live inside the tabular as full-width rows below the bottom rule.
+    if (
+        (footnotes is not None)
+        and (footnotes.footnote_type == "multicolumn")
+        and (not footnotes.empty())
+    ):
+        for marker, text in footnotes.items():
+            output += (
+                " \\multicolumn{"
+                + str(width)
+                + "}{l}{$^{"
+                + marker
+                + "}$ "
+                + text
+                + "}"
+                + LaTeX_table_newline
+                + "\n"
+            )
     output += "\\end{tabular}\n"
+    # "threeparttable" footnotes wrap the whole tabular in a threeparttable/tablenotes block.
+    if (
+        (footnotes is not None)
+        and (footnotes.footnote_type == "threeparttable")
+        and (not footnotes.empty())
+    ):
+        wrapped = "\\begin{threeparttable}\n" + output + "\\begin{tablenotes}\n"
+        for marker, text in footnotes.items():
+            wrapped += "\\item[" + marker + "] " + text + "\n"
+        wrapped += "\\end{tablenotes}\n\\end{threeparttable}\n"
+        output = wrapped
     return output
