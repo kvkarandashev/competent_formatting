@@ -3,11 +3,14 @@ import string
 from .number_formatting import (
     LaTeXInteger,
     LaTeXPlainFloat,
+    LaTeXReportedFloat,
     LaTeXScientific,
     get_floatwerror_mean,
+    is_reported_float,
     isfloat,
     isfloatwerr,
     isint,
+    update_reported_float_alignment_kwargs,
 )
 from .str_formatting import LaTeX_table_newline
 
@@ -35,17 +38,18 @@ class TableFootnotes:
     Collects table footnotes and hands out the markers to splice into table cells.
 
     `footnote_type` selects how `latex_table` renders the collected notes:
+        "multicolumn"    - (default) appends the notes as full-width \\multicolumn rows inside
+                           the tabular; cell markers are superscripts "$^{<marker>}$". Needs no
+                           extra LaTeX package.
         "threeparttable" - wraps the tabular in a threeparttable/tablenotes block; cell
                            markers are "\\tnote{<marker>}" (needs \\usepackage{threeparttable}).
-        "multicolumn"    - appends the notes as full-width \\multicolumn rows inside the
-                           tabular; cell markers are superscripts "$^{<marker>}$".
     If `check_footnote_repetition` is True, identical note texts are stored once and share
     a single marker; if False, every occurrence is kept and gets a marker of its own.
     """
 
     def __init__(
         self,
-        footnote_type="threeparttable",
+        footnote_type="multicolumn",
         check_footnote_repetition=True,
         marker_func=alpha_footnote_marker,
     ):
@@ -169,6 +173,7 @@ def latex_table_open_element_string(
     el,
     float_formatter=LaTeXScientific(),
     int_formatter=LaTeXInteger(),
+    reported_float_formatter=LaTeXReportedFloat(),
     preexp_minus=False,
     max_num_power_numerals=None,
     exp_minus=False,
@@ -177,11 +182,17 @@ def latex_table_open_element_string(
     float_minus=False,
     int_minus=False,
     werrs_present=False,
+    mean_decimals=0,
+    err_decimals=0,
 ):
     if el is None:
         return ""
     if type(el) in [MultiRow, MultiColumn]:
         return el.closed_elements_string()
+    if is_reported_float(el):
+        return reported_float_formatter(
+            el, mean_decimals=mean_decimals, err_decimals=err_decimals, werrs_present=werrs_present
+        )
     if isfloat(el) or isfloatwerr(el):
         if isinstance(float_formatter, LaTeXScientific):
             return float_formatter(
@@ -257,8 +268,16 @@ def update_int_alignment_kwargs(alignment_kwargs, element, int_formatter=LaTeXIn
 
 
 def update_alignment_kwargs(
-    alignment_kwargs, element, float_formatter=LaTeXScientific(), int_formatter=LaTeXInteger()
+    alignment_kwargs,
+    element,
+    float_formatter=LaTeXScientific(),
+    int_formatter=LaTeXInteger(),
+    reported_float_formatter=LaTeXReportedFloat(),
 ):
+    if is_reported_float(element):
+        return update_reported_float_alignment_kwargs(
+            alignment_kwargs, element, formatter=reported_float_formatter
+        )
     if isfloat(element):
         return update_float_alignment_kwargs(
             alignment_kwargs, element, float_formatter=float_formatter
@@ -292,6 +311,7 @@ def latex_table(
     cline_positions={},
     float_formatter=LaTeXScientific(),
     int_formatter=LaTeXInteger(),
+    reported_float_formatter=LaTeXReportedFloat(),
     column_types=None,
     footnotes=None,
 ):
@@ -318,6 +338,7 @@ def latex_table(
                 el,
                 float_formatter=float_formatter,
                 int_formatter=int_formatter,
+                reported_float_formatter=reported_float_formatter,
             )
             if isinstance(el, MultiColumn):
                 col_id += el.ncolumns
@@ -339,7 +360,10 @@ def latex_table(
             output += (
                 " "
                 + latex_table_open_element_string(
-                    el, float_formatter=float_formatter, **alignment_kwargs_list[col_id]
+                    el,
+                    float_formatter=float_formatter,
+                    reported_float_formatter=reported_float_formatter,
+                    **alignment_kwargs_list[col_id],
                 )
                 + cell_split
             )
