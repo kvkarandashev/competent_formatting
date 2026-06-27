@@ -211,7 +211,16 @@ class LaTeXScientific(LaTeXFloat):
                 error_prefactor = shift_decimal(error_prefactor, -1)
                 exp_error += 1
 
-        final_exp = max(exp_init, exp_error)
+        # A value of exactly 0 has no meaningful exponent ("{:e}".format(0.0) reports 0), so it
+        # must not drag the shared exponent down: a small mean like 0.01 paired with a 0.0 error
+        # would otherwise pick final_exp=0 and collapse into a plain "0.01" instead of
+        # "1.00 \cdot 10^{-2}". Choose the common exponent from whichever component is nonzero.
+        candidate_exps = []
+        if number_in.mean_val != 0:
+            candidate_exps.append(exp_init)
+        if number_in.stat_err != 0:
+            candidate_exps.append(exp_error)
+        final_exp = max(candidate_exps) if candidate_exps else 0
         prefactor = shift_decimal(prefactor, exp_init - final_exp)
         error_prefactor = shift_decimal(error_prefactor, exp_error - final_exp)
 
