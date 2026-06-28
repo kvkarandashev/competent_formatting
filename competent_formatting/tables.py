@@ -12,7 +12,7 @@ from .number_formatting import (
     isint,
     update_reported_float_alignment_kwargs,
 )
-from .str_formatting import LaTeX_table_newline
+from .str_formatting import LaTeX_table_newline, phantom_string
 
 phantom = "\\phantom{\\_}"
 
@@ -121,6 +121,34 @@ class MultiRow:
         return (self.element,), {"nrows": self.nrows}
 
 
+class NumberWithFootnote:
+    """
+    Wraps a numeric table cell (`float`, a `(mean, err)` tuple/`FloatWError`, `int`, or
+    `ReportedFloat`) together with a footnote marker to be printed as a superscript right after
+    the number, e.g. ``$(1.00\\pm0.00){ \\cdot } 10^{-2}$$^{a}$``.
+
+    The wrapped value flows through the table's normal per-column alignment pass (so the number
+    lines up with the other numbers in its column); the marker is appended afterwards. To keep
+    the column's numbers centred consistently, every *other* numeric cell in the same column
+    reserves the marker's width with a ``\\phantom{...}`` (driven by the ``has_footnote`` flag
+    that this type sets in the column's alignment kwargs).
+
+    `marker` is whatever `TableFootnotes.cell_marker(...)` returns (e.g. ``"$^{a}$"``), so
+    footnote registration, deduplication and the note rows are reused from `TableFootnotes` --
+    pass the same `TableFootnotes` instance to `latex_table` to render the note texts.
+
+    One marker width per column is assumed (the usual case); if a column mixes markers of
+    different widths, the widest is reserved for the phantom.
+    """
+
+    def __init__(self, value, marker):
+        self.value = value
+        self.marker = marker
+
+    def _init_args(self):
+        return (self.value, self.marker), {}
+
+
 # Credit: https://tex.stackexchange.com/a/19678
 def cell_wlinebreaks(lines, vertical_alignment="t", horizontal_alignment="c"):
     if len(lines) == 1:
@@ -184,18 +212,44 @@ def latex_table_open_element_string(
     werrs_present=False,
     mean_decimals=0,
     err_decimals=0,
+    has_footnote=False,
+    footnote_marker="",
 ):
     if el is None:
         return ""
     if type(el) in [MultiRow, MultiColumn]:
         return el.closed_elements_string()
+    if isinstance(el, NumberWithFootnote):
+        # Render the wrapped number with the column's normal numeric alignment, then append the
+        # real marker. `has_footnote=False` here: this cell carries the marker itself, so it must
+        # not also reserve the alignment phantom that the column's other numbers get.
+        inner = latex_table_open_element_string(
+            el.value,
+            float_formatter=float_formatter,
+            int_formatter=int_formatter,
+            reported_float_formatter=reported_float_formatter,
+            preexp_minus=preexp_minus,
+            max_num_power_numerals=max_num_power_numerals,
+            exp_minus=exp_minus,
+            max_num_int_numerals=max_num_int_numerals,
+            max_num_float_numerals=max_num_float_numerals,
+            float_minus=float_minus,
+            int_minus=int_minus,
+            werrs_present=werrs_present,
+            mean_decimals=mean_decimals,
+            err_decimals=err_decimals,
+            has_footnote=False,
+        )
+        return inner + el.marker
+
+    numeric = True
     if is_reported_float(el):
-        return reported_float_formatter(
+        s = reported_float_formatter(
             el, mean_decimals=mean_decimals, err_decimals=err_decimals, werrs_present=werrs_present
         )
-    if isfloat(el) or isfloatwerr(el):
+    elif isfloat(el) or isfloatwerr(el):
         if isinstance(float_formatter, LaTeXScientific):
-            return float_formatter(
+            s = float_formatter(
                 el,
                 preexp_minus=preexp_minus,
                 max_num_power_numerals=max_num_power_numerals,
@@ -203,16 +257,26 @@ def latex_table_open_element_string(
                 werrs_present=werrs_present,
             )
         elif isinstance(float_formatter, LaTeXPlainFloat):
-            return float_formatter(
+            s = float_formatter(
                 el,
                 minus=float_minus,
                 max_num_numerals=max_num_float_numerals,
                 werrs_present=werrs_present,
             )
-        raise Exception
-    if isint(el):
-        return int_formatter(el, minus=int_minus, max_num_numerals=max_num_int_numerals)
-    return str(el)
+        else:
+            raise Exception
+    elif isint(el):
+        s = int_formatter(el, minus=int_minus, max_num_numerals=max_num_int_numerals)
+    else:
+        numeric = False
+        s = str(el)
+
+    # A footnote in this column means one cell prints a marker superscript; reserve the same
+    # width on every other numeric cell so the column's numbers stay aligned. Non-numeric cells
+    # (headers, pre-formatted strings) are centred independently and left untouched.
+    if has_footnote and numeric:
+        s += phantom_string(footnote_marker)
+    return s
 
 
 def row_width(row):
@@ -274,6 +338,20 @@ def update_alignment_kwargs(
     int_formatter=LaTeXInteger(),
     reported_float_formatter=LaTeXReportedFloat(),
 ):
+    if isinstance(element, NumberWithFootnote):
+        # Flag the column so its other numbers reserve the marker width, keep the widest marker
+        # seen, and let the wrapped value contribute its usual numeric alignment via recursion.
+        alignment_kwargs["has_footnote"] = True
+        prev_marker = alignment_kwargs.get("footnote_marker", "")
+        if len(element.marker) > len(prev_marker):
+            alignment_kwargs["footnote_marker"] = element.marker
+        return update_alignment_kwargs(
+            alignment_kwargs,
+            element.value,
+            float_formatter=float_formatter,
+            int_formatter=int_formatter,
+            reported_float_formatter=reported_float_formatter,
+        )
     if is_reported_float(element):
         return update_reported_float_alignment_kwargs(
             alignment_kwargs, element, formatter=reported_float_formatter

@@ -106,6 +106,10 @@ latex_table(
 - `int` / `np.int64` → `int_formatter`.
 - `(mean, err)` tuple / `list` / `FloatWError` → float-with-error via `float_formatter`.
 - `ReportedFloat` → `reported_float_formatter`.
+- `NumberWithFootnote(value, marker)` → wraps any numeric `value` (float, `(mean, err)`,
+  `int`, `ReportedFloat`); renders it via the normal column alignment then appends `marker` as
+  a superscript. Other numeric cells in the column reserve the marker width with a phantom (see
+  Footnotes below).
 - `MultiColumn(el, ncolumns=n)`, `MultiRow(el, nrows=n)` → spanning cells.
 
 **How alignment works:** `latex_table` first scans every column (`update_alignment_kwargs`) to
@@ -143,3 +147,11 @@ latex_table(table, footnotes=fn)                  # renders the collected notes
   splice in (e.g. `\tnote{a}` or `$^{a,c}$`); markers are assigned `a, b, c, …` in first-appearance
   order (`alpha_footnote_marker`, handles >26 → `aa`). Build the table in final (e.g. date-sorted)
   order so markers read top-to-bottom.
+
+**Footnote on a *number* cell** — for a marker on a numeric cell (not a text cell), wrap the value
+in `NumberWithFootnote(value, marker)` where `marker = footnotes.cell_marker(text)`, and pass the
+same `footnotes` to `latex_table`. The wrapped number keeps its column's numeric alignment and the
+marker is appended after it (`$…$$^{a}$`); every other numeric cell in that column automatically
+gets a `\phantom{$^{a}$}` so the numbers stay aligned. One marker width per column is assumed (the
+widest is reserved if a column mixes markers). Call `cell_marker` while building rows top-to-bottom
+so deduped markers read in order.
