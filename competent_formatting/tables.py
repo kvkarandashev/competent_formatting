@@ -384,6 +384,7 @@ def latex_table(
     table,
     transposed=False,
     midrule_positions=[],
+    interior_rules=None,
     toprule=True,
     bottomrule=True,
     cline_positions={},
@@ -393,6 +394,11 @@ def latex_table(
     column_types=None,
     footnotes=None,
 ):
+    # `interior_rules` maps a row index to raw LaTeX (e.g. "\\bottomrule\n") emitted immediately
+    # before that data row. Unlike `toprule`/`bottomrule` (fixed to the tabular's outer edges),
+    # this allows stacking several rule-bounded sub-tables inside a single tabular -- e.g. a
+    # "\\bottomrule, blank row, \\toprule" break separating two halves of one table.
+    interior_rules = check_keys_integer(interior_rules) if interior_rules else {}
     # introduced after a hard-to-trace error caused by JSON packing dictionnary keys as strings
     cline_positions = check_keys_integer(cline_positions)
     # dim check
@@ -427,6 +433,8 @@ def latex_table(
     if toprule:
         output += "\\toprule\n"
     for row_id, row in enumerate(table):
+        if row_id in interior_rules:
+            output += interior_rules[row_id]
         if row_id in midrule_positions:
             output += "\\midrule"
         if row_id in cline_positions:
