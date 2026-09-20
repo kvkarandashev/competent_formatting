@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>competent_formatting viewer</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+<header id="bar">
+  <span class="group" id="doc-group" title="Documents"></span>
+  <span class="sep"></span>
+  <span class="group" id="profile-group" title="Compilation profile"></span>
+  <span class="sep"></span>
+  <span class="group">
+    <button id="zoom-out" title="Zoom out">&minus;</button>
+    <span id="zoom-label">100%</span>
+    <button id="zoom-in" title="Zoom in">+</button>
+  </span>
+  <span class="sep"></span>
+  <span class="group" id="recompile-group"></span>
+  <span class="spacer"></span>
+  <span id="status" class="status">idle</span>
+  <button id="toggle-log" title="Show/hide the compile log">log</button>
+  <button id="toggle-menu" title="Edit documents, profiles and hooks">menu</button>
+</header>
+
+<main>
+  <div id="pdf-scroll"><div id="pdf-pages"></div></div>
+  <aside id="log-panel" hidden>
+    <div class="panel-head">
+      <span class="group" id="log-tabs">
+        <button data-kind="live" class="active">live</button>
+        <button data-kind="driver">latexmk log</button>
+        <button data-kind="tex">TeX log</button>
+      </span>
+      <span class="spacer"></span>
+      <button id="log-clear">clear</button>
+    </div>
+    <div id="log-paths" class="paths"></div>
+    <pre id="log-body"></pre>
+  </aside>
+</main>
+
+<div id="menu" hidden>
+  <div class="menu-inner">
+    <div class="panel-head">
+      <strong>Session menu</strong><span class="spacer"></span>
+      <button id="menu-close">close</button>
+    </div>
+    <p class="hint" id="menu-config"></p>
+    <h3>Documents</h3>
+    <div id="menu-docs"></div>
+    <div class="row">
+      <input id="new-doc-label" placeholder="label (e.g. si)">
+      <input id="new-doc-path" placeholder="/path/to/main.tex" size="42">
+      <button id="new-doc-add">add document</button>
+    </div>
+    <h3>Clean-profile macros</h3>
+    <p class="hint">
+      <code>unwrap</code> keeps the marked text and drops the macro
+      (<code>\revised{x}</code> &rarr; <code>x</code>);
+      <code>remove</code> drops the macro and its content
+      (<code>\collaboratorcomment{x}</code> &rarr; nothing).
+    </p>
+    <div id="menu-macros"></div>
+    <div class="row">
+      <input id="new-macro-name" placeholder="macro name (no backslash)">
+      <select id="new-macro-mode"><option value="unwrap">unwrap</option><option value="remove">remove</option></select>
+      <button id="new-macro-add">add macro</button>
+    </div>
+    <h3>Global pre-compile hooks</h3>
+    <div id="menu-hooks"></div>
+    <div class="row">
+      <input id="new-hook-cmd" placeholder="shell command, e.g. python figures/make_all.py" size="52">
+      <button id="new-hook-add">add hook</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

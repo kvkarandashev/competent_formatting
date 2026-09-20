@@ -4,7 +4,7 @@ requires = [ "setuptools>=61" ]
 
 [project]
 name = "competent-formatting"
-version = "0.1.2"
+version = "0.2.0"
 description = "For conveniently making competent tables and figures"
 readme = "README.md"
 license = { text = "MIT license" }
@@ -17,10 +17,24 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
-dependencies = [ "click", "numpy", "pylatexenc" ]
+dependencies = [
+  "click",
+  "numpy",
+  "pylatexenc",
+]
+# Everything the `cf_view` web viewer needs; the table/formatting core does not.
+optional-dependencies.view = [
+  "fastapi",
+  "pydantic>=2",
+  "sse-starlette",
+  "tomli-w",
+  "uvicorn",
+]
 scripts.cf_macro_removal = "competent_formatting.bin.macro_removal:main"
 
 scripts.cf_quick_table_view = "competent_formatting.bin.table_view:main"
+
+scripts.cf_view = "competent_formatting.bin.view:main"
 
 [tool.setuptools]
 packages = [
@@ -29,4 +43,6 @@ packages = [
   "competent_formatting.number_formatting",
   "competent_formatting.str_formatting",
   "competent_formatting.processing",
+  "competent_formatting.viewer",
 ]
+package-data."competent_formatting.viewer" = [ "static/*" ]

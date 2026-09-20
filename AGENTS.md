@@ -1,8 +1,9 @@
 # competent_formatting — agent guide
 
 `competent_formatting` builds **LaTeX tables** (and helps with figures) from Python data, with
-careful number formatting and phantom-based column alignment. This file documents the two areas
-most often touched: the **number/float formatters** and the **table-making tools**.
+careful number formatting and phantom-based column alignment, and ships `cf_view`, a local web
+viewer that recompiles LaTeX documents on demand. This file documents the three areas most often
+touched: the **number/float formatters**, the **table-making tools**, and the **viewer**.
 
 ## Dev workflow (read first)
 
@@ -10,6 +11,11 @@ most often touched: the **number/float formatters** and the **table-making tools
   the source you must reinstall for the installed package to change: `make install`
   (`pip install .`). To test the source *without* reinstalling, run with
   `PYTHONPATH=<repo_root>` so `import competent_formatting` resolves to the source tree.
+- The **viewer is an optional extra**: `pip install .` gives the table/formatting core only, while
+  `pip install '.[view]'` adds fastapi, uvicorn, sse-starlette, pydantic and tomli-w. `make install`
+  deliberately installs the core alone. Without the extra, `cf_view --help` still works but running
+  it exits with instructions (see `import_viewer` in `bin/view.py`), and `tests/viewer/conftest.py`
+  drops the viewer tests from collection so `make test` still passes.
 - Formatting/linting is via **pre-commit**: `make review` (= `pre-commit run --all-files`) runs
   `pyproject-fmt`, `black -l 99`, `isort` (black profile, width 99), `autoflake`, `flake8`. Run it
   before committing. Commit messages follow **Conventional Commits** (`feat:`, `fix:`, `build:`,
@@ -155,3 +161,135 @@ marker is appended after it (`$…$$^{a}$`); every other numeric cell in that co
 gets a `\phantom{$^{a}$}` so the numbers stay aligned. One marker width per column is assumed (the
 widest is reserved if a column mixes markers). Call `cell_marker` while building rows top-to-bottom
 so deduped markers read in order.
+
+## `viewer/` — the `cf_view` web viewer
+
+`cf_view` serves a browser UI (FastAPI + PDF.js) that displays one or more compiled `.tex`
+documents and recompiles them on demand. It exists so a manuscript and its SI can be read
+side-by-side with a "clean" variant that has revision markup stripped out.
+
+```bash
+pip install '.[view]'        # the viewer's dependencies are an optional extra
+
+# One-time setup, run from the manuscript directory:
+cf_view --doc main=main.tex --doc si=sd.tex \
+        --opened_macro revised --removed_macro collaboratorcomment \
+        --pre_script "python figures/make_all.py"
+
+# From then on, from that directory or any subdirectory of it:
+cf_view
+```
+
+### Session discovery (`.cf_view`)
+
+With no `--workdir`, `cf_view` walks up from the current directory looking for a `.cf_view/`
+holding a `competent_viewer.toml` — the way git finds `.git` — and uses the first one it finds.
+Failing that it seeds a new session in `./.cf_view`. An explicit `--workdir` bypasses discovery
+entirely, so the older `--workdir ./some-session` style still works.
+
+Two consequences make a `.cf_view` directory safe to **commit alongside the manuscript**:
+
+- **Document paths are stored relative to the workdir** when the document lives inside the project
+  (`main_tex = "../main.tex"`), and absolute otherwise. The config is therefore portable: clone the
+  manuscript somewhere else and the session still resolves. `save_config`/`load_config` convert at
+  the boundary, so the in-memory model always holds absolute paths and nothing else has to care.
+- **`save_config` writes a `.gitignore` into the session directory** (once, never overwritten)
+  covering `build/`, `logs/` and the lock file, so only `competent_viewer.toml` is tracked.
+
+`build_missing_on_start` (default true) makes the server compile anything whose PDF is absent as
+soon as it starts, so a freshly cloned session shows documents instead of "not built yet". A
+restart where `build/` is already populated rebuilds nothing and serves immediately — build
+*statuses* are per-process, so the UI labels those PDFs `cached` rather than `not built`.
+
+`examples/viewer/run_demo.sh` runs it against two small demo documents that actually contain
+revision markup; `run_manuscript.sh` points it at a real manuscript directory.
+
+### Module layout
+
+- `defaults.py` — constants (`DEFAULT_LATEX_CMD`, profile names, the missing-extra hint), kept
+  **free of third-party imports** so `bin/view.py` can read them without pulling in the extra.
+  If you add a viewer constant that the CLI needs at import time, it belongs here, not in
+  `config.py`.
+- `config.py` — Pydantic models (`SessionConfig`, `Document`, `Profile`, `MacroTransform`,
+  `Hook`) plus atomic TOML load/save. **The config file is the single source of truth**: the CLI
+  seeds it, the browser menu mutates it, the server reads it. Nothing that must survive a restart
+  lives only in memory.
+- `session.py` — seeding a config from CLI flags and `reconcile()`-ing on restart.
+- `transforms.py` — the source transform, a thin wrapper over
+  `processing.macro_removal.remove_macros`.
+- `builds.py` — copy → transform → compile, log capture, and the build-status rule.
+- `worker.py` — a single background thread draining an ordered job queue, plus the SSE `EventBus`.
+- `app.py` — FastAPI routes; `bin/view.py` is the thin `click` entry point.
+- `static/` — the frontend. Shipped via `package-data` in `pyproject.toml`; if you add a file
+  there, it is already covered by the `static/*` glob, but **you must `make install` for the
+  installed copy to see it** (the usual non-editable-install gotcha).
+
+### Profiles and macro semantics
+
+Revision markup is expressed as **macros, not environments** — the only stripping machinery in the
+package is `remove_macros`, which walks `pylatexenc` nodes looking for `LatexMacroNode`s.
+Each declared macro maps onto one of its two existing field lists:
+
+| CLI flag | `remove_macros` field | Effect |
+|---|---|---|
+| `--opened_macro revised` | `opened_fields` | `\revised{text}` → `text` (content kept) |
+| `--removed_macro collaboratorcomment` | `removed_fields` | `\collaboratorcomment{x}` → `` (content dropped) |
+
+All declared macros go into **one aggregate `clean` profile**, not one profile per macro, so the UI
+stays a plain `full` ↔ `clean` toggle. `\newcommand` definitions of a stripped macro are dropped
+too (`processed_command_definition` handles that), so the clean copy does not reference an
+undefined macro.
+
+Unwrapping does not change how much text there is, so `full` and `clean` stay aligned page for
+page — which is what makes the toggle useful. Deleting a comment macro *does* reflow the text; that
+is expected, and is why comment macros and revision macros are separate flags.
+
+### Build-status rule — do not "simplify" this to the exit code
+
+`latexmk` exits non-zero on a non-fatal BibTeX error (e.g. a `@misc` entry with no `title`) and
+**re-reports that cached error on every subsequent no-op run**. The default compile command
+therefore passes `-f`, and status is decided by whether the PDF is at least as new as the inputs it
+was built from, not by the exit code:
+
+| Condition | Status | Shown |
+|---|---|---|
+| no PDF at all | `failed` | previous PDF, if any |
+| PDF older than the sources | `failed` | previous PDF |
+| PDF current, exit code 0 | `ok` | new PDF |
+| PDF current, exit code non-zero | `warning` | new PDF + a warning |
+
+Keying off the exit code alone makes a perfectly good manuscript read as permanently broken;
+keying off "a PDF exists" alone hides genuine failures behind a stale PDF.
+`tests/viewer/test_viewer_builds.py` pins all four rows.
+
+### Logs
+
+Two logs per build, both at stable paths and both surfaced in the UI (the log panel prints the
+filesystem paths so they can be opened in an editor):
+
+- `<workdir>/logs/<doc_id>__<profile>.log` — the driver's combined stdout/stderr.
+- `<workdir>/build/<doc_id>/<profile>/<stem>.log` — the **TeX log**. Diagnostics such as
+  `LaTeX Warning: There were undefined references` live here and *not* in the driver output, so
+  this is the one to grep when hunting compilation problems.
+
+### Invariants worth preserving
+
+- **Sources are never mutated.** Builds run on a copy in `<workdir>/build/<doc_id>/<profile>/`.
+  `materialize_build_dir` writes a file only when its *content* changes, so untouched inputs keep
+  their mtime and `latexmk` stays incremental (~0.1 s vs ~3 s for this repo's test manuscript).
+- **A workdir nested inside the source tree is skipped** when copying, or a build would recurse
+  into itself.
+- **Compilation never blocks a request handler.** Routes enqueue; one worker thread compiles;
+  progress reaches the browser over SSE.
+- **Explicit-vs-default flag detection is required behavior**, not a detail:
+  `click`'s `ctx.get_parameter_source(...) is ParameterSource.COMMANDLINE` drives reconciliation.
+  On restart, an explicitly-passed flag that contradicts the persisted config exits 2 with a listing
+  of `<flag>: CLI=<value> vs workdir=<value>`; `--overwrite_config` is the escape hatch. Flags left
+  at their default never reset a stored value.
+
+### Two caveats
+
+- **PDF.js is loaded from cdnjs**, so the UI needs internet on first load. Vendor
+  `pdf.min.js`/`pdf.worker.min.js` into `static/` if you need it to work offline.
+- **The recompile button is remote code execution**: it runs the configured hooks. The default bind
+  is `127.0.0.1`; prefer `tailscale serve` in front of a localhost bind over widening `--host`.

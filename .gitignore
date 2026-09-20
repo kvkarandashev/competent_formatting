@@ -1,0 +1,25 @@
+# Python build / install artifacts
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+
+# LaTeX compile artifacts (figures and committed PDFs are kept deliberately)
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.log
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+
+# Ad-hoc cf_view session directories. A project-local .cf_view/ is NOT ignored:
+# it carries its own .gitignore so only competent_viewer.toml is tracked.
+*-session/
