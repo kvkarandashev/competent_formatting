@@ -1,9 +1,11 @@
 # competent_formatting — agent guide
 
 `competent_formatting` builds **LaTeX tables** (and helps with figures) from Python data, with
-careful number formatting and phantom-based column alignment, and ships `cf_view`, a local web
-viewer that recompiles LaTeX documents on demand. This file documents the three areas most often
-touched: the **number/float formatters**, the **table-making tools**, and the **viewer**.
+careful number formatting and phantom-based column alignment, and ships two LaTeX tools:
+`cf_quick_table_view`, which compiles one generated table on its own, and `cf_view`, a local web
+viewer that recompiles whole documents on demand. This file documents the four areas most often
+touched: the **number/float formatters**, the **table-making tools**, **rendering a table to
+preview or width-check it**, and the **viewer**.
 
 ## Dev workflow (read first)
 
@@ -161,6 +163,70 @@ marker is appended after it (`$…$$^{a}$`); every other numeric cell in that co
 gets a `\phantom{$^{a}$}` so the numbers stay aligned. One marker width per column is assumed (the
 widest is reserved if a column mixes markers). Call `cell_marker` while building rows top-to-bottom
 so deduped markers read in order.
+
+## `table_rendering.py` — previewing a table, and checking it fits
+
+`latex_table` emits a bare `tabular`, which says nothing about how the table behaves inside a
+real document. The thing that actually goes wrong is **width**: a table too wide for its float
+is not a LaTeX error. LaTeX writes `Overfull \hbox (…pt too wide)` into the log, produces a PDF
+anyway, and the table runs off the page. Nothing fails, nothing exits non-zero, and the problem
+reaches the journal. This module exists to make that visible.
+
+```python
+from competent_formatting.table_rendering import render_table, check_table_fits
+
+result = render_table("my_table.tex")                 # compiles in a temp dir, nothing kept
+result.compiled          # did LaTeX succeed
+result.fits              # did nothing run past the text width -- SEPARATE from compiled
+result.worst_overfull_pt # how far over, in points
+result.summary()         # "ok" | "123pt too wide" | the LaTeX errors
+
+status, result = check_table_fits("my_table.tex")     # "ok" | "needs adjustbox" | "failed"
+```
+
+`compiled` and `fits` are deliberately separate properties. Collapsing them loses exactly the
+case this is for: an over-wide table **compiles**.
+
+`wrap_table_into_test_tex` builds the throwaway document and is parameterised, because the
+width a table has to fit is a property of the *destination*, not of the table:
+
+- `documentclass` — everything after `\documentclass`, options included. The default is the
+  historical JCTC `achemso` preview; a RevTeX manuscript passes `[aip,jcp,preprint]{revtex4-2}`.
+  Overflow figures are not transferable between classes (one table measured 130pt over in
+  `achemso` and 40pt over in RevTeX `preprint`), so check against the real one.
+- `packages` — `\usepackage` arguments. Given explicitly they **replace** the defaults.
+- `preamble` — spliced in verbatim, for macro definitions and anything that is not a package line.
+- `table_environment` — `table` (one column), `table*` (both), `sidewaystable` (rotated, needs
+  `rotating`). A table that overflows `table` often fits `table*` untouched.
+- `adjustbox` — wrap in `\begin{adjustbox}{max width=\textwidth,center}`, which shrinks an
+  over-wide table to fit. `check_table_fits` tries this itself and reports `needs adjustbox`
+  when it rescues the table, because that is a one-line manuscript change rather than a defect.
+
+`render_table(path, out_dir=...)` keeps the wrapper document and the PDF there (the preview
+case); without `out_dir` it works in a temporary directory that is removed, so only the parsed
+result survives (the checking case) and no `test_table_*.tex`/`.aux`/`.log` litter is left
+behind. A LaTeX failure is returned as a result, never raised; only a missing `pdflatex` raises
+(`PDFLaTeXMissingError`).
+
+### `cf_quick_table_view`
+
+The CLI over the above — `competent_formatting/bin/table_view.py`, a thin wrapper as the other
+`bin/` entry points are.
+
+```bash
+# Preview: writes test_table_<name>.pdf beside the table, as it always has.
+cf_quick_table_view my_table.tex --replacements '\MAE:\mathrm{MAE}'
+
+# Check against the manuscript's real class; exits non-zero if it does not fit.
+cf_quick_table_view my_table.tex --check \
+    --documentclass '[aip,jcp,preprint]{revtex4-2}' \
+    --package booktabs --package multirow --table_environment 'table*'
+```
+
+Both modes report overfull boxes; the preview keeps its PDF and still exits 0, since looking at
+a too-wide table is a legitimate thing to want. `--check` keeps nothing and gates on the result.
+`--replacements` defines `\newcommand`s for macros the table uses but the test document would
+not otherwise know (`--preamble_file` takes a whole file for the same purpose).
 
 ## `viewer/` — the `cf_view` web viewer
 

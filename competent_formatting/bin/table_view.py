@@ -1,42 +1,19 @@
+"""``cf_quick_table_view``: compile one generated table on its own and look at it."""
+
 import os
-import shutil
-import subprocess
+import sys
 
 import click
 
-from ..str_formatting import replace_special_LaTeX_symbols
-
-pdflatex_command = "pdflatex"
-
-
-def wrap_table_into_test_tex(table_source_file, pdf_title, newcommands=""):
-    test_source = (
-        """
-\\documentclass[journal=jctc,manuscript=article,layout=traditional]{achemso}
-\\usepackage{multirow,tabularx}
-\\usepackage{booktabs}
-
-"""
-        + newcommands
-        + """
-
-\\title{"""
-        + pdf_title
-        + """}
-
-\\begin{document}
-\\maketitle
-
-\\begin{table}
-\\input{"""
-        + table_source_file[:-4]
-        + """}
-\\end{table}
-\\end{document}
-
-"""
-    )
-    return test_source
+from ..table_rendering import (
+    DEFAULT_DOCUMENTCLASS,
+    DEFAULT_PACKAGES,
+    DEFAULT_TABLE_ENVIRONMENT,
+    PDFLaTeXMissingError,
+    check_table_fits,
+    newcommands_from_replacements,
+    render_table,
+)
 
 
 @click.command()
@@ -44,29 +21,113 @@ def wrap_table_into_test_tex(table_source_file, pdf_title, newcommands=""):
 @click.option(
     "--replacements",
     default=None,
-    help="specifying comma-separated replacement string (e.g. 'a:\\mathrm{A},b:\\mathrm{B}') will result in the corresponding replacements being performed in the final PDF via addition of '\\newcommand' lines",
+    help="specifying comma-separated replacement string (e.g. 'a:\\mathrm{A},b:\\mathrm{B}') will "
+    "result in the corresponding replacements being performed in the final PDF via addition of "
+    "'\\newcommand' lines",
 )
-def main(filename, replacements):
+@click.option(
+    "--documentclass",
+    default=DEFAULT_DOCUMENTCLASS,
+    help="everything after \\documentclass, options included; default is the JCTC achemso class. "
+    "Pass the manuscript's own to see the table at its real width.",
+)
+@click.option(
+    "--package",
+    "packages",
+    multiple=True,
+    help="a \\usepackage argument; repeatable. Replaces the default set when given.",
+)
+@click.option(
+    "--preamble_file",
+    default=None,
+    help="file whose contents are spliced into the preamble verbatim, for macro definitions "
+    "and anything that is not a plain \\usepackage line.",
+)
+@click.option(
+    "--table_environment",
+    default=DEFAULT_TABLE_ENVIRONMENT,
+    help="float to put the table in: 'table' (one column), 'table*' (both), 'sidewaystable'.",
+)
+@click.option(
+    "--adjustbox",
+    is_flag=True,
+    help="wrap the table in \\begin{adjustbox}{max width=\\textwidth,center}, which shrinks an "
+    "over-wide table to fit.",
+)
+@click.option(
+    "--check",
+    is_flag=True,
+    help="report only, keeping no PDF, and exit non-zero if the table does not typeset or does "
+    "not fit the text width.",
+)
+def main(
+    filename,
+    replacements,
+    documentclass,
+    packages,
+    preamble_file,
+    table_environment,
+    adjustbox,
+    check,
+):
     """
-    Generate a PDF embedding the table created with `competent_formatting.tables` output, with `FILENAME` defining input TeX file.
+    Generate a PDF embedding the table created with `competent_formatting.tables` output, with
+    `FILENAME` defining input TeX file.
+
+    An overfull table still produces a PDF, so the width is reported either way: LaTeX does not
+    treat "runs off the page" as an error and neither run would otherwise tell you.
     """
-    if not (len(filename) > 4 and (filename[:-4] != ".tex")):
-        print("Tex filename must end with '.tex'!")
-        exit(1)
+    if os.path.splitext(filename)[1] != ".tex":
+        click.echo("Tex filename must end with '.tex'!", err=True)
+        sys.exit(1)
 
-    if shutil.which(pdflatex_command) is None:
-        print(f"{pdflatex_command} should be installed!")
-        exit(1)
+    preamble = ""
+    if preamble_file is not None:
+        with open(preamble_file, "r") as f:
+            preamble = f.read()
 
-    newcommands = ""
-    if replacements is not None:
-        for replacement in replacements.split(","):
-            r1, r2 = replacement.split(":")
-            newcommands += "\\newcommand{" + r1 + "}{" + r2 + "}\n"
+    wrap_kwargs = {
+        "newcommands": newcommands_from_replacements(replacements),
+        "documentclass": documentclass,
+        "packages": packages if packages else DEFAULT_PACKAGES,
+        "preamble": preamble,
+        "table_environment": table_environment,
+    }
 
-    pdf_title = "Displaying table: " + replace_special_LaTeX_symbols(filename)
-    test_source = wrap_table_into_test_tex(filename, pdf_title, newcommands=newcommands)
-    test_source_filename = "test_table_" + os.path.basename(filename)
-    with open(test_source_filename, "w") as f:
-        f.write(test_source)
-    subprocess.run(["pdflatex", test_source_filename])
+    try:
+        if check:
+            status, result = check_table_fits(filename, **wrap_kwargs)
+        else:
+            # The preview writes beside the table, as it always has, so the PDF is there to open.
+            result = render_table(
+                filename,
+                out_dir=os.path.dirname(os.path.abspath(filename)),
+                adjustbox=adjustbox,
+                **wrap_kwargs,
+            )
+            status = "ok" if result.compiled and result.fits else None
+    except PDFLaTeXMissingError as error:
+        click.echo(str(error), err=True)
+        sys.exit(1)
+
+    for error in result.errors:
+        click.echo(f"LaTeX error: {error}", err=True)
+    if not result.fits:
+        click.echo(
+            f"{result.worst_overfull_pt:.0f}pt too wide for {table_environment} in this class",
+            err=True,
+        )
+
+    if check:
+        click.echo(f"{status}: {filename}")
+        if status == "needs adjustbox":
+            click.echo(
+                "  fits inside \\begin{adjustbox}{max width=\\textwidth,center}; add that "
+                "around the \\input in the manuscript"
+            )
+        sys.exit(0 if status == "ok" else 1)
+
+    if result.pdf_path is not None:
+        click.echo(f"wrote {result.pdf_path}")
+    elif not result.compiled:
+        sys.exit(1)
