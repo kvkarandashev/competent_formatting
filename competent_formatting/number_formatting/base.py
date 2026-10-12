@@ -3,6 +3,21 @@ from ..str_formatting import phantom_string
 pzero = phantom_string(0)
 pminus = phantom_string("-")
 
+# Multiplication symbol used in scientific notation ("1.00 <symbol> 10^{-2}").
+# Default "\cdot" preserves historical output; AIP/JCP style wants "\times".
+# Set globally once with set_sci_mult_symbol(...), or override per formatter instance
+# via the LaTeXScientific(mult_symbol=...) argument.
+_SCI_MULT_SYMBOL = r"\cdot"
+
+
+def get_sci_mult_symbol():
+    return _SCI_MULT_SYMBOL
+
+
+def set_sci_mult_symbol(symbol):
+    global _SCI_MULT_SYMBOL
+    _SCI_MULT_SYMBOL = symbol
+
 
 def padded_number_string(s, minus=False, max_num_symbols=None, pad_beginning=True):
     pad_string = ""

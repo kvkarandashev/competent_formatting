@@ -1,7 +1,14 @@
 # K.Karan.: I am still not %100 decided whether using error_roundup is a good idea.
 
 from ..str_formatting import phantom_string
-from .base import LaTeXNumber, inline_formula, padded_number_string, pm_error, pminus
+from .base import (
+    LaTeXNumber,
+    get_sci_mult_symbol,
+    inline_formula,
+    padded_number_string,
+    pm_error,
+    pminus,
+)
 
 
 class FloatWError:
@@ -134,12 +141,20 @@ class LaTeXFloat(LaTeXNumber):
 
 
 class LaTeXScientific(LaTeXFloat):
-    def __init__(self, num_numerals=1, error_roundup=False):
+    def __init__(self, num_numerals=1, error_roundup=False, mult_symbol=None):
         self.num_numerals = num_numerals
         self.error_roundup = error_roundup
+        # None -> defer to the module-level default (get_sci_mult_symbol), so a global
+        # set_sci_mult_symbol(...) affects instances built with default args (including
+        # latex_table's default formatters). Pass a string to override just this instance.
+        self.mult_symbol = mult_symbol
 
     def _init_args(self):
-        return (), {"num_numerals": self.num_numerals, "error_roundup": self.error_roundup}
+        return (), {
+            "num_numerals": self.num_numerals,
+            "error_roundup": self.error_roundup,
+            "mult_symbol": self.mult_symbol,
+        }
 
     def get_prefactor_exp_parts(self, number_in, num_numerals=None):
         if num_numerals is None:
@@ -152,8 +167,11 @@ class LaTeXScientific(LaTeXFloat):
         no_exp_needed = exp_int == 0
         if no_exp_needed and (max_num_power_numerals is None):
             return ""
+        mult_symbol = self.mult_symbol if self.mult_symbol is not None else get_sci_mult_symbol()
         exp_part = (
-            "{ \\cdot } 10^{"
+            "{ "
+            + mult_symbol
+            + " } 10^{"
             + padded_number_string(
                 str(exp_int),
                 minus=exp_minus,

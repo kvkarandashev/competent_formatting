@@ -1,3 +1,4 @@
+from .base import get_sci_mult_symbol, set_sci_mult_symbol
 from .float_formats import (
     FloatWError,
     LaTeXPlainFloat,

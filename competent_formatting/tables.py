@@ -6,6 +6,7 @@ from .number_formatting import (
     LaTeXReportedFloat,
     LaTeXScientific,
     get_floatwerror_mean,
+    get_sci_mult_symbol,
     is_reported_float,
     isfloat,
     isfloatwerr,
@@ -178,11 +179,12 @@ def preexp_power(n):
     return parts[0], int(parts[1])
 
 
-def latex_single_number_form(val, phantom_minus_alignment=False):
+def latex_single_number_form(val, phantom_minus_alignment=False, mult_symbol=None):
     pe, power = preexp_power(val)
     output = pe
     if power != 0:
-        output += "\\cdot 10^{" + str(power) + "}"
+        sym = mult_symbol if mult_symbol is not None else get_sci_mult_symbol()
+        output += sym + " 10^{" + str(power) + "}"
     if phantom_minus_alignment and val > 0.0:
         output = "\\phantom{-}" + output
     return output
