@@ -1,5 +1,5 @@
 from ..str_formatting import phantom_string
-from .base import LaTeXNumber, inline_formula, pm_error
+from .base import LaTeXNumber, inline_formula, pm_error, pminus, pzero
 
 
 class ReportedFloat:
@@ -35,7 +35,30 @@ def phantom_pad_fraction(num_str, num_decimals):
     n_pad = num_decimals - fraction_decimals(num_str)
     if n_pad <= 0:
         return num_str
-    return num_str + phantom_string("0") * n_pad
+    # A value written without a decimal point ("1" beside "0.732") needs the point's width
+    # reserved too, or it comes out narrower than the column by exactly that glyph.
+    point = "" if "." in num_str else phantom_string(".")
+    return num_str + point + phantom_string("0") * n_pad
+
+
+def integer_numerals(num_str):
+    # Digits before the decimal point, sign excluded ("-9.52" -> 1, "12.3" -> 2, "7" -> 1).
+    return len(num_str.lstrip("-").split(".")[0])
+
+
+def phantom_pad_integer(num_str, num_numerals, minus_present=False):
+    # Left-pad with phantom zeros to a common integer-part width, and with a phantom minus
+    # where the column holds a negative value and this one is not it:
+    #   phantom_pad_integer("0.258", 1, minus_present=True) -> "\phantom{-}0.258"
+    # This is the half of the alignment that `phantom_pad_fraction` does not do.  Without it a
+    # column mixing "-9.523" with "0.258" is centred cell by cell and its decimal points wander.
+    padding = ""
+    if minus_present and not num_str.startswith("-"):
+        padding = pminus
+    n_pad = num_numerals - integer_numerals(num_str)
+    if n_pad > 0:
+        padding = pzero * n_pad + padding
+    return padding + num_str
 
 
 class LaTeXReportedFloat(LaTeXNumber):
@@ -46,7 +69,9 @@ class LaTeXReportedFloat(LaTeXNumber):
 
     `mean_decimals` / `err_decimals` are the per-column maxima supplied by the table's
     alignment pass; `werrs_present` marks a column that has at least one error so error-less
-    values reserve the "\\pm <error>" width with a phantom.
+    values reserve the "\\pm <error>" width with a phantom.  `mean_numerals` / `mean_minus`
+    are the same pass's integer-part maxima, and pad the mean on the left so that a column
+    mixing "-9.523" with "0.258" still lines up on the decimal point.
 
     Examples (mean_decimals=2, err_decimals=2):
         ("0.92", "0.01")           -> "$0.92\\pm0.01$"
@@ -60,6 +85,9 @@ class LaTeXReportedFloat(LaTeXNumber):
     def get_err_decimals(self, reported_float):
         return 0 if reported_float.err is None else fraction_decimals(reported_float.err)
 
+    def get_mean_numerals(self, reported_float):
+        return integer_numerals(reported_float.mean)
+
     def get_formatted_number(
         self,
         reported_float,
@@ -67,8 +95,14 @@ class LaTeXReportedFloat(LaTeXNumber):
         err_decimals=0,
         werrs_present=False,
         err_placeholder=None,
+        mean_numerals=0,
+        mean_minus=False,
     ):
-        mean_part = phantom_pad_fraction(reported_float.mean, mean_decimals)
+        mean_part = phantom_pad_integer(
+            phantom_pad_fraction(reported_float.mean, mean_decimals),
+            mean_numerals,
+            minus_present=mean_minus,
+        )
         if reported_float.err is not None:
             return inline_formula(
                 pm_error(mean_part, phantom_pad_fraction(reported_float.err, err_decimals))
@@ -89,13 +123,21 @@ default_reported_float_formatter = LaTeXReportedFloat()
 def update_reported_float_alignment_kwargs(
     alignment_kwargs, reported_float, formatter=default_reported_float_formatter
 ):
-    # Accumulate the per-column maxima the renderer needs: widest mean fraction, widest error
-    # fraction, and whether any cell in the column carries an error.
+    # Accumulate the per-column maxima the renderer needs: widest mean fraction and integer
+    # part, widest error fraction, whether any mean is negative, and whether any cell in the
+    # column carries an error.
     mean_decimals = formatter.get_mean_decimals(reported_float)
     if ("mean_decimals" not in alignment_kwargs) or (
         alignment_kwargs["mean_decimals"] < mean_decimals
     ):
         alignment_kwargs["mean_decimals"] = mean_decimals
+    mean_numerals = formatter.get_mean_numerals(reported_float)
+    if ("mean_numerals" not in alignment_kwargs) or (
+        alignment_kwargs["mean_numerals"] < mean_numerals
+    ):
+        alignment_kwargs["mean_numerals"] = mean_numerals
+    if reported_float.mean.startswith("-"):
+        alignment_kwargs["mean_minus"] = True
     if reported_float.err is not None:
         alignment_kwargs["werrs_present"] = True
         err_decimals = formatter.get_err_decimals(reported_float)

@@ -38,6 +38,14 @@ def inline_formula(s):
     return "$" + s + "$"
 
 
+def is_inline_formula(s):
+    # Whether a rendered cell is math rather than text. The two take different LaTeX wrappers
+    # for the same visual effect -- \textbf around $...$ leaves the digits unbolded, silently,
+    # because the math font is selected independently of the text font -- so anything that
+    # decorates a finished cell has to know which it is holding.
+    return len(s) > 1 and s.startswith("$") and s.endswith("$")
+
+
 def pm_error(s1, s2):
     return s1 + "\\pm" + s2
 

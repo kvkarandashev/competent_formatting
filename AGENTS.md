@@ -30,14 +30,15 @@ preview or width-check it**, and the **viewer**.
 Split by concern; the import graph is **acyclic** (`base` is the root, `utils` is a leaf):
 
 - `base.py` — base class + shared LaTeX rendering primitives: `LaTeXNumber`, `inline_formula`,
-  `pm_error`, `padded_number_string` (+ `pzero`, `pminus`). Imports only `..str_formatting`.
+  `is_inline_formula`, `pm_error`, `padded_number_string` (+ `pzero`, `pminus`). Imports only
+  `..str_formatting`.
 - `float_formats.py` — `LaTeXFloat`, `LaTeXScientific`, `LaTeXPlainFloat`, the `FloatWError` type
   and its predicates `isfloatwerr`/`get_floatwerror_mean`, plus float-only string helpers
   (`error_roundup`, `shift_decimal`, `brackets_enclosure`). Imports `base` + `str_formatting`.
 - `integer_formats.py` — `LaTeXInteger`. Imports `base`.
 - `reported_float_formats.py` — `ReportedFloat`, `LaTeXReportedFloat`, `is_reported_float`,
-  `fraction_decimals`, `phantom_pad_fraction`, `update_reported_float_alignment_kwargs`. Imports
-  `base` + `str_formatting`.
+  `fraction_decimals`, `phantom_pad_fraction`, `integer_numerals`, `phantom_pad_integer`,
+  `update_reported_float_alignment_kwargs`. Imports `base` + `str_formatting`.
 - `utils.py` — generic numeric predicates only: `isfloat`, `isint`, `int_numeral_length`. numpy
   only, no sibling imports.
 
@@ -85,9 +86,17 @@ latex_table(table, column_types="lc", midrule_positions=[1])
 
 - `ReportedFloat(mean, err=None)` stores `mean`/`err` as **strings** (digits preserved).
 - Alignment is handled by `latex_table`'s normal per-column pass — `update_reported_float_alignment_kwargs`
-  accumulates `mean_decimals`, `err_decimals`, `werrs_present` for the column, then
-  `LaTeXReportedFloat.get_formatted_number` renders each cell. **Do not** scan the column yourself.
-- Helpers `fraction_decimals(s)` and `phantom_pad_fraction(s, n)` are reusable.
+  accumulates `mean_decimals`, `err_decimals`, `werrs_present`, `mean_numerals` and `mean_minus`
+  for the column, then `LaTeXReportedFloat.get_formatted_number` renders each cell. **Do not**
+  scan the column yourself.
+- Padding goes **both ways**, and both halves are needed for a column to line up on its decimal
+  point: `phantom_pad_fraction` pads the fraction on the right (and reserves the decimal point
+  itself for a value written without one, so `1` is as wide as `0.732`), while
+  `phantom_pad_integer` pads the integer part on the left with `\phantom{0}` and reserves a
+  `\phantom{-}` where the column holds a negative value. Without the left half a column mixing
+  `-9.523` with `0.258` is centred cell by cell and its decimal points wander.
+- Helpers `fraction_decimals(s)`, `phantom_pad_fraction(s, n)`, `integer_numerals(s)` and
+  `phantom_pad_integer(s, n, minus_present=)` are reusable.
 
 ## Table-making tools (`tables.py`)
 
@@ -118,13 +127,16 @@ latex_table(
   `int`, `ReportedFloat`); renders it via the normal column alignment then appends `marker` as
   a superscript. Other numeric cells in the column reserve the marker width with a phantom (see
   Footnotes below).
+- `Styled(value, style=BOLD)` → wraps any cell so the rendered result is decorated;
+  `MinInColumn` / `MaxInColumn` are the same thing decided per column (see **Marking a cell**).
 - `MultiColumn(el, ncolumns=n)`, `MultiRow(el, nrows=n)` → spanning cells.
 
 **How alignment works:** `latex_table` first scans every column (`update_alignment_kwargs`) to
 accumulate per-column maxima (numeral widths, exponent widths, `werrs_present`, `mean_decimals`,
-`err_decimals`), then renders each cell with those kwargs. To support a new value type, add a branch
-to both `update_alignment_kwargs` and `latex_table_open_element_string` (as `ReportedFloat` does) —
-do not pre-compute alignment outside the table.
+`err_decimals`, `mean_numerals`, `mean_minus`) plus anything else a cell has to know about its
+column (`column_min`, `column_max`), then renders each cell with those kwargs. To support a new
+value type, add a branch to both `update_alignment_kwargs` and `latex_table_open_element_string`
+(as `ReportedFloat` does) — do not pre-compute alignment outside the table.
 
 **`column_types` caveat:** it is emitted verbatim and **not** validated against the actual number of
 cells per row (only row-to-row width consistency is asserted). A wrong count (e.g. `"lcccc"` for a
@@ -132,6 +144,46 @@ cells per row (only row-to-row width consistency is asserted). A wrong count (e.
 
 **`cell_wlinebreaks(lines, vertical_alignment="t", horizontal_alignment="c")`** — the only correct
 way to put line breaks inside a cell (nests a tabular).
+
+### Marking a cell — bold the best value in a column
+
+```python
+from competent_formatting.tables import BOLD, MinInColumn, Styled, latex_table
+
+table = [
+    ["method", "MAE", "RMSE"],
+    ["A", MinInColumn((0.144, 0.004)), MinInColumn((0.207, 0.017))],   # -> {\boldmath$...$}
+    ["B", MinInColumn((0.176, 0.015)), MinInColumn((0.246, 0.026))],
+    ["note", Styled("see text"), None],                                 # -> \textbf{see text}
+]
+```
+
+- **`CellStyle(text=(prefix, suffix), math=(prefix, suffix))`** — how a cell is set apart, as
+  LaTeX. Two wrappers, because `\textbf{$0.144$}` **does not bold the digits** and does not say
+  so: the math font is selected independently of the text font. `apply` picks by looking at the
+  rendered cell, so callers pass a style and never ask which kind of cell they are on.
+  Shipped: **`BOLD`** (`\textbf{…}` / `{\boldmath…}` — plain LaTeX, needs no package, and bolds
+  the minus sign and the `\pm` too, which `\mathbf` would leave at normal weight) and
+  **`UNDERLINE`**.
+- **`Styled(value, style=BOLD)`** — unconditional; the caller decided.
+- **`MinInColumn(value, style=BOLD, precision=None)` / `MaxInColumn(...)`** — decided during
+  the per-column alignment pass, by comparing against *the other marked cells of the same
+  column*. Only wrapped cells take part, so a column that mixes an error with a count compares
+  neither against the other; **ties are all marked**, because a tie is what the numbers say.
+  Pass `precision=<the column's decimals>`: the comparison is then made on the digits the cell
+  prints, so two cells that both read `0.304` are either both marked or neither is. Without it
+  the raw values decide and the table marks a difference it does not show.
+- The wrapped value flows through its column's normal alignment first, so a marked number keeps
+  its padding and its footnote marker and only then gets the wrapper. It works on any numeric
+  cell type (`float`, `(mean, err)`, `int`, `ReportedFloat`, `NumberWithFootnote`) and on strings.
+- `cell_numeric_key(cell)` is what the comparison uses — a float-with-error reduces to its mean,
+  a `ReportedFloat` to its reported mean, a wrapper to what it wraps. A non-numeric cell raises
+  rather than being silently skipped.
+- Caveat worth knowing: **bold costs width**. A bold glyph is wider than its regular
+  counterpart, so marking one cell widens its whole column — measured at 20pt on a six-column
+  table of errors, which is enough to push a table that fitted over its float. `UNDERLINE` costs
+  nothing: the rule takes exactly the width the cell already had. Either way, re-check a table
+  near the edge with `check_table_fits`.
 
 ### Footnotes (`TableFootnotes`)
 

@@ -7,6 +7,7 @@ from .number_formatting import (
     LaTeXScientific,
     get_floatwerror_mean,
     get_sci_mult_symbol,
+    is_inline_formula,
     is_reported_float,
     isfloat,
     isfloatwerr,
@@ -150,6 +151,145 @@ class NumberWithFootnote:
         return (self.value, self.marker), {}
 
 
+class CellStyle:
+    """How a cell is set apart from the rest of its column, as LaTeX.
+
+    Two wrappers rather than one, because a table cell is either text or an inline formula and
+    the same macro does not serve both: ``\\textbf{$0.144$}`` leaves the digits unbolded and
+    says nothing about it, since the math font is selected independently of the text font.
+    `apply` picks the wrapper by looking at the rendered cell, so a caller passes `BOLD` and
+    does not have to know which kind of cell it landed on.
+
+    Each wrapper is a (prefix, suffix) pair, and the math one wraps the formula INCLUDING its
+    dollars -- ``{\\boldmath$0.144$}`` -- because that is how a math font switch has to be
+    written.
+    """
+
+    def __init__(self, text=("", ""), math=("", "")):
+        self.text = tuple(text)
+        self.math = tuple(math)
+
+    def apply(self, rendered):
+        prefix, suffix = self.math if is_inline_formula(rendered) else self.text
+        return prefix + rendered + suffix
+
+    def _init_args(self):
+        return (), {"text": self.text, "math": self.math}
+
+
+# `\boldmath` rather than `\mathbf`: it bolds the whole formula, the minus sign and the \pm
+# included, and it is plain LaTeX, so a table using it needs no package the document might not
+# have. `\mathbf` would leave the signs at their normal weight.
+BOLD = CellStyle(text=("\\textbf{", "}"), math=("{\\boldmath", "}"))
+
+# `\underline` is one of the few that is spelled the same in both modes.
+UNDERLINE = CellStyle(text=("\\underline{", "}"), math=("\\underline{", "}"))
+
+
+def cell_numeric_key(value):
+    """The number a cell stands for, for comparing cells within a column.
+
+    Every numeric cell type reduces to one float: a float-with-error to its mean, a
+    `ReportedFloat` to its reported mean, and the wrappers to whatever they wrap.  A cell that
+    is not a number has no key and raises, rather than being silently skipped in a comparison
+    it was asked to take part in.
+    """
+    if isinstance(value, (Styled, NumberWithFootnote)):
+        return cell_numeric_key(value.value)
+    if is_reported_float(value):
+        return float(value.mean)
+    if isfloatwerr(value):
+        return float(get_floatwerror_mean(value))
+    if isfloat(value) or isint(value):
+        return float(value)
+    raise ValueError(f"{value!r} is not a numeric cell, so it cannot be compared with one")
+
+
+class Styled:
+    """Wraps any cell so that it is rendered with a `CellStyle` applied.
+
+    The wrapped value flows through the table's normal per-column alignment pass, so a styled
+    number keeps its column's padding and only then gets its wrapper.  Styling is a property of
+    the finished cell, not of the number, which is why this wraps rather than replaces the value.
+
+    `Styled` itself is unconditional -- the caller decided.  `MinInColumn` and `MaxInColumn`
+    decide during that same alignment pass instead, by comparing against the other marked cells
+    of their column.
+    """
+
+    def __init__(self, value, style=BOLD):
+        self.value = value
+        self.style = style
+
+    def update_column_extremes(self, alignment_kwargs):
+        # Nothing to accumulate: an unconditional style needs no knowledge of the column.
+        return alignment_kwargs
+
+    def shows_style(self, column_min=None, column_max=None):
+        return True
+
+    def _init_args(self):
+        return (self.value,), {"style": self.style}
+
+
+class ColumnExtremum(Styled):
+    """Styled where the cell is the extreme value among the marked cells of its column.
+
+    The column scope is the point, and is why these are not called "best": a table says which
+    way is better by what it puts in a column, and the comparison this makes is exactly the one
+    a reader makes down a column of the same quantity.  Cells that are not wrapped do not take
+    part -- a column mixing an error with a count compares neither against the other -- and ties
+    are all marked, because a tie is what the numbers say.
+
+    `precision` is the number of decimals the column prints, and comparing at it is what keeps
+    the mark honest: without it, two cells that both read "0.304" can come out one bold and one
+    not, on a difference the table does not show.  Left at None the raw values are compared,
+    which is right only where the cells are printed in full.
+    """
+
+    extremum_key = None
+    extremum_function = None
+
+    def __init__(self, value, style=BOLD, precision=None):
+        super().__init__(value, style=style)
+        self.precision = precision
+
+    def key(self):
+        key = cell_numeric_key(self.value)
+        if self.precision is None:
+            return key
+        # Through the formatting rather than round(), so the comparison is on the digits the
+        # cell actually prints.
+        return float(f"{key:.{self.precision}f}")
+
+    def update_column_extremes(self, alignment_kwargs):
+        key = self.key()
+        previous = alignment_kwargs.get(self.extremum_key)
+        if previous is None:
+            alignment_kwargs[self.extremum_key] = key
+        else:
+            alignment_kwargs[self.extremum_key] = type(self).extremum_function(previous, key)
+        return alignment_kwargs
+
+    def shows_style(self, column_min=None, column_max=None):
+        extremes = {"column_min": column_min, "column_max": column_max}
+        extreme = extremes[self.extremum_key]
+        return extreme is not None and self.key() == extreme
+
+    def _init_args(self):
+        return (self.value,), {"style": self.style, "precision": self.precision}
+
+
+class MinInColumn(ColumnExtremum):
+    extremum_key = "column_min"
+    extremum_function = min
+
+
+class MaxInColumn(ColumnExtremum):
+    extremum_key = "column_max"
+    extremum_function = max
+
+
 # Credit: https://tex.stackexchange.com/a/19678
 def cell_wlinebreaks(lines, vertical_alignment="t", horizontal_alignment="c"):
     if len(lines) == 1:
@@ -214,6 +354,10 @@ def latex_table_open_element_string(
     werrs_present=False,
     mean_decimals=0,
     err_decimals=0,
+    mean_numerals=0,
+    mean_minus=False,
+    column_min=None,
+    column_max=None,
     has_footnote=False,
     footnote_marker="",
 ):
@@ -221,6 +365,32 @@ def latex_table_open_element_string(
         return ""
     if type(el) in [MultiRow, MultiColumn]:
         return el.closed_elements_string()
+    if isinstance(el, Styled):
+        # Render the wrapped cell exactly as it would be rendered on its own -- the column's
+        # alignment, and its footnote marker if it carries one -- and decorate the result.
+        inner = latex_table_open_element_string(
+            el.value,
+            float_formatter=float_formatter,
+            int_formatter=int_formatter,
+            reported_float_formatter=reported_float_formatter,
+            preexp_minus=preexp_minus,
+            max_num_power_numerals=max_num_power_numerals,
+            exp_minus=exp_minus,
+            max_num_int_numerals=max_num_int_numerals,
+            max_num_float_numerals=max_num_float_numerals,
+            float_minus=float_minus,
+            int_minus=int_minus,
+            werrs_present=werrs_present,
+            mean_decimals=mean_decimals,
+            err_decimals=err_decimals,
+            mean_numerals=mean_numerals,
+            mean_minus=mean_minus,
+            has_footnote=has_footnote,
+            footnote_marker=footnote_marker,
+        )
+        if el.shows_style(column_min=column_min, column_max=column_max):
+            return el.style.apply(inner)
+        return inner
     if isinstance(el, NumberWithFootnote):
         # Render the wrapped number with the column's normal numeric alignment, then append the
         # real marker. `has_footnote=False` here: this cell carries the marker itself, so it must
@@ -240,6 +410,8 @@ def latex_table_open_element_string(
             werrs_present=werrs_present,
             mean_decimals=mean_decimals,
             err_decimals=err_decimals,
+            mean_numerals=mean_numerals,
+            mean_minus=mean_minus,
             has_footnote=False,
         )
         return inner + el.marker
@@ -247,7 +419,12 @@ def latex_table_open_element_string(
     numeric = True
     if is_reported_float(el):
         s = reported_float_formatter(
-            el, mean_decimals=mean_decimals, err_decimals=err_decimals, werrs_present=werrs_present
+            el,
+            mean_decimals=mean_decimals,
+            err_decimals=err_decimals,
+            werrs_present=werrs_present,
+            mean_numerals=mean_numerals,
+            mean_minus=mean_minus,
         )
     elif isfloat(el) or isfloatwerr(el):
         if isinstance(float_formatter, LaTeXScientific):
@@ -340,6 +517,18 @@ def update_alignment_kwargs(
     int_formatter=LaTeXInteger(),
     reported_float_formatter=LaTeXReportedFloat(),
 ):
+    if isinstance(element, Styled):
+        # A conditional style decides by comparing the column's marked cells, which is the same
+        # kind of per-column accumulation the numeric alignment does and happens in the same
+        # pass; the wrapped value then contributes its alignment as usual.
+        alignment_kwargs = element.update_column_extremes(alignment_kwargs)
+        return update_alignment_kwargs(
+            alignment_kwargs,
+            element.value,
+            float_formatter=float_formatter,
+            int_formatter=int_formatter,
+            reported_float_formatter=reported_float_formatter,
+        )
     if isinstance(element, NumberWithFootnote):
         # Flag the column so its other numbers reserve the marker width, keep the widest marker
         # seen, and let the wrapped value contribute its usual numeric alignment via recursion.
