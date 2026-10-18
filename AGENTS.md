@@ -209,6 +209,10 @@ latex_table(table, footnotes=fn)                  # renders the collected notes
   splice in (e.g. `\tnote{a}` or `$^{a,c}$`); markers are assigned `a, b, c, …` in first-appearance
   order (`alpha_footnote_marker`, handles >26 → `aa`). Build the table in final (e.g. date-sorted)
   order so markers read top-to-bottom.
+- `sort_cell_markers=True` (**default**) — a cell with several notes lists its markers in marker
+  order (`$^{d,f}$`) regardless of the order the notes were passed in; sorting is by index, so
+  `aa` follows `z`. A marker named twice in one cell is printed once. `False` keeps the order the
+  notes were passed in.
 
 **Footnote on a *number* cell** — for a marker on a numeric cell (not a text cell), wrap the value
 in `NumberWithFootnote(value, marker)` where `marker = footnotes.cell_marker(text)`, and pass the

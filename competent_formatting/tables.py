@@ -47,6 +47,9 @@ class TableFootnotes:
                            markers are "\\tnote{<marker>}" (needs \\usepackage{threeparttable}).
     If `check_footnote_repetition` is True, identical note texts are stored once and share
     a single marker; if False, every occurrence is kept and gets a marker of its own.
+    If `sort_cell_markers` is True (default), a cell carrying several notes lists their markers
+    in marker order ("$^{d,f}$") whatever order the notes were passed in; if False, the markers
+    follow the order of the notes.
     """
 
     def __init__(
@@ -54,6 +57,7 @@ class TableFootnotes:
         footnote_type="multicolumn",
         check_footnote_repetition=True,
         marker_func=alpha_footnote_marker,
+        sort_cell_markers=True,
     ):
         assert (
             footnote_type in FOOTNOTE_TYPES
@@ -61,21 +65,22 @@ class TableFootnotes:
         self.footnote_type = footnote_type
         self.check_footnote_repetition = check_footnote_repetition
         self.marker_func = marker_func
+        self.sort_cell_markers = sort_cell_markers
         self.texts = []  # note texts in the order their markers are assigned
 
-    def _register(self, text):
+    def _register_index(self, text):
         if self.check_footnote_repetition and (text in self.texts):
-            index = self.texts.index(text)
-        else:
-            index = len(self.texts)
-            self.texts.append(text)
-        return self.marker_func(index)
+            return self.texts.index(text)
+        self.texts.append(text)
+        return len(self.texts) - 1
 
     def cell_marker(self, notes):
         """
         Register one cell's footnote(s) and return the marker string to splice into the
         cell (e.g. "\\tnote{a}" or "$^{a,c}$"); returns "" when there are no notes.
-        `notes` is a single text or a list of texts, kept in the given order.
+        `notes` is a single text or a list of texts.  Their markers are listed in marker order
+        when `sort_cell_markers` is set -- sorted by index, not alphabetically, so "aa" comes
+        after "z" -- and a marker repeated within the cell is printed once.
         """
         if notes is None:
             return ""
@@ -84,7 +89,13 @@ class TableFootnotes:
         notes = [text for text in notes if text]
         if not notes:
             return ""
-        marker_str = ",".join(self._register(text) for text in notes)
+        indices = [self._register_index(text) for text in notes]
+        if self.sort_cell_markers:
+            indices = sorted(indices)
+        # Keep the first occurrence of each marker; a deduplicated note named twice in one cell
+        # would otherwise print its marker twice.
+        indices = list(dict.fromkeys(indices))
+        marker_str = ",".join(self.marker_func(index) for index in indices)
         if self.footnote_type == "threeparttable":
             return "\\tnote{" + marker_str + "}"
         return "$^{" + marker_str + "}$"
