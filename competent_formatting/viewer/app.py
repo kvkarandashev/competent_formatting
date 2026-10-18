@@ -15,6 +15,7 @@ from .config import (
     CLEAN_PROFILE,
     FULL_PROFILE,
     Document,
+    EnvironmentTransform,
     Hook,
     MacroTransform,
     Profile,
@@ -60,7 +61,10 @@ class RecompileBody(BaseModel):
 
 
 class TransformBody(BaseModel):
-    macro_name: str
+    """One entry of the clean profile: a macro name or an environment name, never both."""
+
+    macro_name: str | None = None
+    environment_name: str | None = None
     mode: str = "unwrap"
 
 
@@ -277,10 +281,23 @@ def create_app(state, bus=None, worker=None):
                     raise HTTPException(status_code=400, detail=f"no such file: {main_tex}")
                 document.main_tex = main_tex
             if body.clean_transforms is not None:
-                transforms = [
-                    MacroTransform(macro_name=item.macro_name, mode=item.mode)
-                    for item in body.clean_transforms
-                ]
+                transforms = []
+                for item in body.clean_transforms:
+                    if item.environment_name:
+                        transforms.append(
+                            EnvironmentTransform(
+                                environment_name=item.environment_name, mode=item.mode
+                            )
+                        )
+                    elif item.macro_name:
+                        transforms.append(
+                            MacroTransform(macro_name=item.macro_name, mode=item.mode)
+                        )
+                    else:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="a transform needs either macro_name or environment_name",
+                        )
                 _set_clean_profile(document, transforms)
             state.persist()
         return state_payload()

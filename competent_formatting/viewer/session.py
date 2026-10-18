@@ -11,6 +11,7 @@ from .config import (
     CLEAN_PROFILE,
     FULL_PROFILE,
     Document,
+    EnvironmentTransform,
     Hook,
     MacroTransform,
     Profile,
@@ -61,11 +62,40 @@ def resolve_tex(path):
     return str(resolved)
 
 
-def clean_transforms(opened_macros, removed_macros):
+def clean_transforms(opened_macros, removed_macros, opened_envs=(), removed_envs=()):
     """Build the transform list for the aggregate ``clean`` profile."""
     transforms = [MacroTransform(macro_name=name, mode="unwrap") for name in opened_macros]
     transforms += [MacroTransform(macro_name=name, mode="remove") for name in removed_macros]
+    transforms += [
+        EnvironmentTransform(environment_name=name, mode="unwrap") for name in opened_envs
+    ]
+    transforms += [
+        EnvironmentTransform(environment_name=name, mode="remove") for name in removed_envs
+    ]
     return transforms
+
+
+def transform_key(transform):
+    """What identifies a transform: the name alone is ambiguous across the two kinds.
+
+    A manuscript can define both a ``\\rev`` macro and a ``rev`` environment, and they are
+    stripped differently, so reconciliation keys on the pair.
+    """
+    if transform.kind == "strip_environment":
+        return ("environment", transform.environment_name)
+    return ("macro", transform.macro_name)
+
+
+def transform_from_key(key, mode):
+    kind, name = key
+    if kind == "environment":
+        return EnvironmentTransform(environment_name=name, mode=mode)
+    return MacroTransform(macro_name=name, mode=mode)
+
+
+def describe_key(key):
+    kind, name = key
+    return f"{name} ({kind})"
 
 
 def make_profiles(transforms):
@@ -79,7 +109,12 @@ def make_profiles(transforms):
 
 def seed_config(spec):
     """Create a brand-new config from CLI values."""
-    transforms = clean_transforms(spec["opened_macros"], spec["removed_macros"])
+    transforms = clean_transforms(
+        spec["opened_macros"],
+        spec["removed_macros"],
+        spec.get("opened_envs", ()),
+        spec.get("removed_envs", ()),
+    )
     config = SessionConfig(
         host=spec["host"],
         port=spec["port"],
@@ -153,26 +188,40 @@ def _stored_transforms(config):
     for document in config.documents:
         profile = document.profile(CLEAN_PROFILE)
         if profile is not None:
-            return {t.macro_name: t.mode for t in profile.transforms}
+            return {transform_key(t): t.mode for t in profile.transforms}
     return {}
 
 
+MARKUP_FLAGS = {
+    ("macro", "unwrap"): "--opened_macro",
+    ("macro", "remove"): "--removed_macro",
+    ("environment", "unwrap"): "--opened_env",
+    ("environment", "remove"): "--removed_env",
+}
+MARKUP_SPEC_KEYS = ("opened_macros", "removed_macros", "opened_envs", "removed_envs")
+
+
 def _reconcile_macros(config, spec, explicit, overwrite, conflicts, changes):
-    if not ({"opened_macros", "removed_macros"} & set(explicit)):
+    if not (set(MARKUP_SPEC_KEYS) & set(explicit)):
         return
     wanted = {
-        t.macro_name: t.mode
-        for t in clean_transforms(spec["opened_macros"], spec["removed_macros"])
+        transform_key(t): t.mode
+        for t in clean_transforms(
+            spec["opened_macros"],
+            spec["removed_macros"],
+            spec.get("opened_envs", ()),
+            spec.get("removed_envs", ()),
+        )
     }
     stored = _stored_transforms(config)
 
-    for name, mode in wanted.items():
-        if name in stored and stored[name] != mode:
-            flag = "--opened_macro" if mode == "unwrap" else "--removed_macro"
+    for key, mode in wanted.items():
+        if key in stored and stored[key] != mode:
+            flag = MARKUP_FLAGS[(key[0], mode)]
             if overwrite:
-                changes.append(f"macro {name}: {stored[name]} -> {mode}")
+                changes.append(f"{describe_key(key)}: {stored[key]} -> {mode}")
             else:
-                conflicts.append((f"{flag} {name}", mode, stored[name]))
+                conflicts.append((f"{flag} {key[1]}", mode, stored[key]))
     if conflicts and not overwrite:
         return
 
@@ -180,7 +229,7 @@ def _reconcile_macros(config, spec, explicit, overwrite, conflicts, changes):
     merged.update(wanted)
     if merged == stored:
         return
-    transforms = [MacroTransform(macro_name=n, mode=m) for n, m in merged.items()]
+    transforms = [transform_from_key(key, mode) for key, mode in merged.items()]
     for document in config.documents:
         profile = document.profile(CLEAN_PROFILE)
         if profile is None:
@@ -189,9 +238,9 @@ def _reconcile_macros(config, spec, explicit, overwrite, conflicts, changes):
             )
         else:
             profile.transforms = [t.model_copy() for t in transforms]
-    added = sorted(set(merged) - set(stored))
+    added = sorted(describe_key(key) for key in set(merged) - set(stored))
     if added:
-        changes.append(f"clean profile: added macros {', '.join(added)}")
+        changes.append(f"clean profile: added {', '.join(added)}")
 
 
 def _reconcile_docs(config, spec, explicit, overwrite, conflicts, changes):
@@ -203,7 +252,7 @@ def _reconcile_docs(config, spec, explicit, overwrite, conflicts, changes):
         if existing is None:
             taken = {document.id for document in config.documents}
             transforms = [
-                MacroTransform(macro_name=n, mode=m) for n, m in _stored_transforms(config).items()
+                transform_from_key(key, mode) for key, mode in _stored_transforms(config).items()
             ]
             config.documents.append(
                 Document(

@@ -1,11 +1,13 @@
 # competent_formatting — agent guide
 
 `competent_formatting` builds **LaTeX tables** (and helps with figures) from Python data, with
-careful number formatting and phantom-based column alignment, and ships two LaTeX tools:
-`cf_quick_table_view`, which compiles one generated table on its own, and `cf_view`, a local web
-viewer that recompiles whole documents on demand. This file documents the four areas most often
+careful number formatting and phantom-based column alignment, and ships three LaTeX tools:
+`cf_quick_table_view`, which compiles one generated table on its own, `cf_view`, a local web
+viewer that recompiles whole documents on demand, and `cf_jcp_source`, which turns a working
+manuscript into a journal-ready source package. This file documents the areas most often
 touched: the **number/float formatters**, the **table-making tools**, **rendering a table to
-preview or width-check it**, and the **viewer**.
+preview or width-check it**, the **source-processing layer**, the **submission packager**, and
+the **viewer**.
 
 ## Dev workflow (read first)
 
@@ -279,6 +281,123 @@ Both modes report overfull boxes; the preview keeps its PDF and still exits 0, s
 a too-wide table is a legitimate thing to want. `--check` keeps nothing and gates on the result.
 `--replacements` defines `\newcommand`s for macros the table uses but the test document would
 not otherwise know (`--preamble_file` takes a whole file for the same purpose).
+
+## `processing/` — reading and rewriting LaTeX source
+
+Everything that treats a `.tex` file as *text to be rewritten* rather than a document to be
+compiled. The import graph is acyclic and `latex_spans` is the root:
+
+- `latex_spans.py` — the scanner that classifies every byte as **code**, **comment** or
+  **protected** (verbatim-like). Every rewriter starts here, because the alternative is a
+  regex that eventually eats a `%` inside a `\url`, inlines an `\input` that sits in a
+  comment, or "normalises" a character inside `lstlisting`. Also `strip_comments_by_line`,
+  which is line-preserving on purpose — a line is shortened or deleted, never joined — so
+  provenance survives it.
+- `macro_removal.py` — strips revision markup: `remove_macros(text, opened_fields=,
+  removed_fields=, opened_envs=, removed_envs=)`. **Macros and environments both**, each
+  either *opened* (markup goes, content stays) or *removed* (both go), with the
+  `\newcommand`/`\newenvironment` that defines a stripped name dropped along with it.
+- `flatten.py` — inlines `\input`/`\include` into one file **with provenance**: every output
+  line knows the `(file, line)` it came from, through any depth of inclusion. Also finds and
+  renames graphics.
+- `unicode_ascii.py` — the non-ASCII → LaTeX table. Anything it does not cover is an error
+  quoting the original file and line, never a silent pass-through.
+- `latex_build.py` — running pdflatex/latexmk and parsing the log. Shared with
+  `table_rendering.py` (overfull boxes) and `viewer/builds.py` (the build-status rule below),
+  so there is one copy of each.
+- `jcp_source.py` / `jcp_checks.py` — the submission packager and its checks (next section).
+
+### Environments are first-class revision markup
+
+`remove_macros` used to walk `LatexMacroNode`s only, so `\rev{...}` was stripped while
+`\begin{revblock} ... \end{revblock}` sailed through untouched — including its
+`\newenvironment` definition. Both forms are now handled, and the option appears in all three
+places that strip markup:
+
+| | macro | environment |
+|---|---|---|
+| `remove_macros` | `opened_fields` / `removed_fields` | `opened_envs` / `removed_envs` |
+| `cf_macro_removal` | `--opened_fields` / `--removed_fields` (colon-separated) | `--opened_envs` / `--removed_envs` |
+| `cf_view` | `--opened_macro` / `--removed_macro` | `--opened_env` / `--removed_env` |
+| `cf_jcp_source` | `--opened_macro` / `--removed_macro` | `--opened_env` / `--removed_env` |
+
+A macro and an environment can share a name and are stripped differently, so the viewer's
+session config keys a transform on the **pair** (`kind`, name); `Transform` is a union
+discriminated by `kind`, and a config written before environments existed still loads because
+every transform in it says `kind = "strip_macro"`.
+
+## `cf_jcp_source` — a submittable source package
+
+```bash
+cf_jcp_source main.tex --out jcp_submission \
+    --si sm.tex \
+    --opened_macro rev --opened_env revblock \
+    --removed_macro authorcomment
+```
+
+Writes a directory holding what AIP's Peer X-Press upload wants:
+
+```
+jcp_submission/
+├── source/          # flat: main.tex, fig1.pdf, ... (+ main.bbl with --bbl separate)
+├── source.zip       # the same files, no folder inside the archive
+├── main.pdf         # the author-generated PDF, built from source/ in isolation
+├── sm.pdf           # with --si
+├── alt_text.txt     # a draft, one entry per figure and table
+├── report.md        # checks, figure map, replacements
+└── build/           # the working builds, kept so a failure can be inspected
+```
+
+Pipeline: flatten `\input`s → strip revision markup → normalise non-ASCII → full `latexmk`
+build (for the `.bbl` and a reference page count) → copy and rename figures → inline the
+`.bbl` → ship local `.sty`/`.cls` → **verify** → supplementary material → alt text, archive,
+report. Sources are never modified.
+
+### The guarantee: verified in an empty directory, with pdflatex alone
+
+The last step copies `source/` into a fresh directory and compiles it there with **pdflatex
+only** — no latexmk, no BibTeX, no project `latexmkrc`, nothing else from the project. An
+undefined reference, a missing file or a LaTeX error *there* is a hard failure, because it
+would be a failure at the journal too. This is the whole point of the tool; a packager that
+only copies files tells you nothing. The same build's page count is compared with the full
+build's, because a difference means flattening changed the document.
+
+Hard failures also include: a font not embedded in a PDF figure, a non-ASCII byte left in a
+shipped `.tex`, a subdirectory in `source/`, and revision markup still present after cleaning.
+Everything else (class options, duplicate packages, placeholders, missing Data Availability or
+Author Declarations sections, overfull boxes, float citation order) is a warning — `--strict`
+promotes them. Exit codes: 0 clean, 1 a hard check failed (output kept), 2 a usage error.
+
+### Two things that are easy to get wrong
+
+- **BibTeX runs more than once.** Under RevTeX a `\cite` inside a `\footnote` goes through a
+  second database (`<stem>Notes.bib`) that does not exist until after the first BibTeX pass,
+  so one pass leaves it undefined. `latexmk` is used for the full build precisely so the
+  passes are repeated as often as needed; the `.bbl` it produces is what gets shipped.
+- **The `.bbl` is spliced in literally.** It is dense with backslashes, and `re.sub` reads
+  `\1` or `\g<0>` in a title as a replacement-group reference. `inline_bibliography` slices.
+
+### What is not verifiable
+
+AIP's public author instructions cover figures, alt text, the RevTeX template and the required
+declarations. What they do **not** state is whether the Peer X-Press TeX pipeline runs BibTeX
+or accepts subdirectories — that lives in a PXP FAQ that could not be fetched. The defaults
+are therefore the ones that are correct under either answer: a flat directory and the
+bibliography inlined from the `.bbl`, with `--bbl separate` as the alternative. If the FAQ is
+ever consulted, only defaults need to change.
+
+### `--force` does not mean "delete whatever is there"
+
+It removes only the names this tool writes (`source/`, `build/`, `source.zip`, `*.pdf`,
+`alt_text.txt`, `report.md`). A `--out` holding anything else is refused, so pointing the tool
+at the wrong directory cannot destroy work. `--out` may also not be the manuscript directory
+or a parent of it.
+
+### EPS figures
+
+AIP prefers EPS for accepted manuscripts, so an `.eps` is shipped as-is. pdflatex cannot read
+it directly, so the isolated verification build converts it with `epstopdf` first (and warns
+if `epstopdf` is missing). The shipped package is unaffected either way.
 
 ## `viewer/` — the `cf_view` web viewer
 

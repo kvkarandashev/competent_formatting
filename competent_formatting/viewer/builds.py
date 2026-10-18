@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from ..processing.latex_build import build_status
 from .transforms import TransformError, transform_source_text
 
 MANIFEST_NAME = ".cf_view_sources.json"
@@ -226,30 +227,12 @@ def compile_build(document, profile, workdir, latex_cmd, on_line=None):
     # The exit code alone cannot tell "fine" from "broken": latexmk re-reports a
     # cached BibTeX error on every no-op rerun, so a perfectly good build would
     # otherwise flag as failed forever.  What matters is whether the PDF on disk
-    # is at least as new as the inputs it was made from.
+    # is at least as new as the inputs it was made from -- the rule itself lives
+    # in processing/latex_build.py, where the submission packager reads it too.
     driver_name = Path(latex_cmd.split()[0]).name
-    newest_input = _newest_input_mtime(build_dir)
-    pdf_up_to_date = pdf_mtime_after is not None and (
-        newest_input is None or pdf_mtime_after >= newest_input
+    status, message = build_status(
+        pdf_mtime_after, _newest_input_mtime(build_dir), returncode, driver_name
     )
-
-    if pdf_mtime_after is None:
-        status = "failed"
-        message = f"{driver_name} exited {returncode} and produced no PDF."
-    elif not pdf_up_to_date:
-        status = "failed"
-        message = (
-            f"{driver_name} exited {returncode} and left the PDF older than the sources; "
-            "the previous one is still being shown."
-        )
-    elif returncode == 0:
-        status, message = "ok", ""
-    else:
-        status = "warning"
-        message = (
-            f"{driver_name} exited {returncode} but the PDF is up to date; "
-            "check the log for unresolved references or BibTeX errors."
-        )
 
     if message:
         lines.append("")

@@ -19,16 +19,18 @@ preview, and a RevTeX manuscript passes its own.
 """
 
 import os
-import re
 import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
+from .processing.latex_build import (  # noqa: F401  (re-exported: callers catch this one)
+    PDFLATEX_COMMAND,
+    PDFLaTeXMissingError,
+    parse_log,
+)
 from .str_formatting import replace_special_LaTeX_symbols
-
-PDFLATEX_COMMAND = "pdflatex"
 
 # The historical preview target. Kept as the default so `cf_quick_table_view` behaves as it
 # always has for callers that pass nothing.
@@ -39,13 +41,6 @@ DEFAULT_PACKAGES = ("multirow,tabularx", "booktabs")
 # `sidewaystable` (rotated, needs the `rotating` package) -- which is a decision about the
 # manuscript, so it is an argument rather than something guessed here.
 DEFAULT_TABLE_ENVIRONMENT = "table"
-
-_LATEX_ERROR = re.compile(r"^! (.+)$", re.MULTILINE)
-_OVERFULL_HBOX = re.compile(r"^Overfull \\hbox \(([0-9.]+)pt too wide\)", re.MULTILINE)
-
-
-class PDFLaTeXMissingError(RuntimeError):
-    """Raised instead of failing obscurely when pdflatex is not on PATH."""
 
 
 def newcommands_from_replacements(replacements):
@@ -199,13 +194,14 @@ def render_table(table_source_file, out_dir=None, job_name=None, **wrap_kwargs):
         parsed = log or process.stdout
 
         pdf_path = os.path.join(workdir, job_name + ".pdf")
+        summary = parse_log(parsed)
         return TableRenderResult(
             table_source_file=table_source_file,
             returncode=process.returncode,
             log=parsed,
             pdf_path=pdf_path if (keep and os.path.isfile(pdf_path)) else None,
-            errors=[error.strip() for error in _LATEX_ERROR.findall(parsed)],
-            overfull_pt=[float(amount) for amount in _OVERFULL_HBOX.findall(parsed)],
+            errors=summary.errors,
+            overfull_pt=summary.overfull_pt,
         )
     finally:
         if not keep:

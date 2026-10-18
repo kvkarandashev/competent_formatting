@@ -30,6 +30,8 @@ optional-dependencies.view = [
   "tomli-w",
   "uvicorn",
 ]
+scripts.cf_jcp_source = "competent_formatting.bin.jcp_source:main"
+
 scripts.cf_macro_removal = "competent_formatting.bin.macro_removal:main"
 
 scripts.cf_quick_table_view = "competent_formatting.bin.table_view:main"

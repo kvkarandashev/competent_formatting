@@ -1,9 +1,9 @@
 """Source transforms applied to a *copy* of a document's sources before compiling.
 
-A transform is a pure ``source tree -> source tree`` step.  The only kind so
-far wraps :func:`competent_formatting.processing.macro_removal.remove_macros`,
-which is why revision markup must be expressed as macros
-(``\\revised{text}``) rather than environments.
+A transform is a pure ``source tree -> source tree`` step.  Both kinds wrap
+:func:`competent_formatting.processing.macro_removal.remove_macros`: revision
+markup written as a macro (``\\revised{text}``) and the same idea written as an
+environment (``\\begin{revblock} ... \\end{revblock}``).
 """
 
 from pathlib import Path
@@ -17,26 +17,34 @@ class TransformError(Exception):
     """Raised when a transform cannot be applied to a source file."""
 
 
-def split_macro_transforms(transforms):
-    """Split transforms into the two field lists ``remove_macros`` expects."""
-    removed_fields = []
-    opened_fields = []
+def split_transforms(transforms):
+    """Split transforms into the four name lists ``remove_macros`` expects."""
+    fields = {"removed_fields": [], "opened_fields": [], "removed_envs": [], "opened_envs": []}
     for transform in transforms:
-        if transform.kind != "strip_macro":
-            raise TransformError(f"unsupported transform kind: {transform.kind}")
-        if transform.mode == "remove":
-            removed_fields.append(transform.macro_name)
+        removed = transform.mode == "remove"
+        if transform.kind == "strip_macro":
+            key = "removed_fields" if removed else "opened_fields"
+            fields[key].append(transform.macro_name)
+        elif transform.kind == "strip_environment":
+            key = "removed_envs" if removed else "opened_envs"
+            fields[key].append(transform.environment_name)
         else:
-            opened_fields.append(transform.macro_name)
-    return removed_fields, opened_fields
+            raise TransformError(f"unsupported transform kind: {transform.kind}")
+    return fields
+
+
+def split_macro_transforms(transforms):
+    """``(removed_fields, opened_fields)`` -- the macro half, kept for older callers."""
+    fields = split_transforms(transforms)
+    return fields["removed_fields"], fields["opened_fields"]
 
 
 def transform_source_text(text, transforms):
     """Apply every transform to one LaTeX source string."""
-    removed_fields, opened_fields = split_macro_transforms(transforms)
-    if not removed_fields and not opened_fields:
+    fields = split_transforms(transforms)
+    if not any(fields.values()):
         return text
-    return remove_macros(text, removed_fields=removed_fields, opened_fields=opened_fields)
+    return remove_macros(text, **fields)
 
 
 def iter_tex_files(root):

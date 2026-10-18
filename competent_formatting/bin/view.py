@@ -16,6 +16,8 @@ EXPLICIT_KEYS = {
     "doc": "docs",
     "opened_macro": "opened_macros",
     "removed_macro": "removed_macros",
+    "opened_env": "opened_envs",
+    "removed_env": "removed_envs",
     "pre_script": "pre_scripts",
     "doc_pre_script": "doc_pre_scripts",
     "host": "host",
@@ -87,6 +89,19 @@ def free_port(host, start):
     "(e.g. 'collaboratorcomment': \\collaboratorcomment{note} -> '').",
 )
 @click.option(
+    "--opened_env",
+    "opened_env",
+    multiple=True,
+    help="Revision environment whose body is KEPT in the clean profile "
+    "(e.g. 'revblock': \\begin{revblock}text\\end{revblock} -> text).",
+)
+@click.option(
+    "--removed_env",
+    "removed_env",
+    multiple=True,
+    help="Environment dropped with its body in the clean profile.",
+)
+@click.option(
     "--pre_script", "pre_script", multiple=True, help="Global pre-compile hook (shell command)."
 )
 @click.option(
@@ -122,6 +137,8 @@ def main(
     doc,
     opened_macro,
     removed_macro,
+    opened_env,
+    removed_env,
     pre_script,
     doc_pre_script,
     host,
@@ -151,6 +168,8 @@ def main(
             "docs": [viewer.parse_labelled(value, "--doc") for value in doc],
             "opened_macros": list(opened_macro),
             "removed_macros": list(removed_macro),
+            "opened_envs": list(opened_env),
+            "removed_envs": list(removed_env),
             "pre_scripts": list(pre_script),
             "doc_pre_scripts": [
                 viewer.parse_labelled(value, "--doc_pre_script") for value in doc_pre_script

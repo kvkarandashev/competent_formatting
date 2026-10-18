@@ -8,7 +8,7 @@ survives a restart lives only in process memory.
 import os
 import re
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional, Union
 
 import tomli_w
 import tomllib
@@ -37,9 +37,23 @@ class MacroTransform(BaseModel):
     mode: Literal["unwrap", "remove"] = "unwrap"
 
 
-# Kept as a union of one so that a future StripEnvironment transform slots in
-# without changing any persisted config that is already on disk.
-Transform = MacroTransform
+class EnvironmentTransform(BaseModel):
+    """Strip a revision *environment* from a copy of the sources.
+
+    The environment form of the same idea as :class:`MacroTransform`: ``unwrap`` keeps the
+    body (``\\begin{revblock}text\\end{revblock}`` -> ``text``), ``remove`` drops it with the
+    body. Separate from the macro transform because a name can be both -- a ``\\rev`` macro
+    and a ``revblock`` environment are different things to strip.
+    """
+
+    kind: Literal["strip_environment"] = "strip_environment"
+    environment_name: str
+    mode: Literal["unwrap", "remove"] = "unwrap"
+
+
+# Discriminated by ``kind``, so a config written before environments existed still loads:
+# every transform in it carries kind = "strip_macro".
+Transform = Annotated[Union[MacroTransform, EnvironmentTransform], Field(discriminator="kind")]
 
 
 class Profile(BaseModel):

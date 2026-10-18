@@ -317,12 +317,12 @@ function renderMenu() {
   (clean?.transforms || []).forEach((transform) => {
     const row = document.createElement("div");
     row.className = "item";
-    row.innerHTML = `<span class="mono">\\${transform.macro_name}{...}</span>
+    row.innerHTML = `<span class="mono">${transformLabel(transform)}</span>
                      <span class="hint">${transform.mode}</span>`;
     const remove = document.createElement("button");
     remove.textContent = "remove";
     remove.onclick = () => updateMacros(
-      (clean.transforms || []).filter((t) => t.macro_name !== transform.macro_name));
+      (clean.transforms || []).filter((t) => transformId(t) !== transformId(transform)));
     const spacer = document.createElement("span");
     spacer.className = "spacer";
     row.append(spacer, remove);
@@ -348,8 +348,22 @@ function renderMenu() {
   });
 }
 
+/* A macro and an environment can share a name and are stripped differently, so the
+   identity of a transform is the pair -- the same rule the server reconciles on. */
+function transformId(t) {
+  return t.environment_name ? `env:${t.environment_name}` : `macro:${t.macro_name}`;
+}
+
+function transformLabel(t) {
+  return t.environment_name
+    ? `\\begin{${t.environment_name}}...\\end{${t.environment_name}}`
+    : `\\${t.macro_name}{...}`;
+}
+
 async function updateMacros(transforms) {
-  const payload = transforms.map((t) => ({ macro_name: t.macro_name, mode: t.mode }));
+  const payload = transforms.map((t) => ({
+    macro_name: t.macro_name, environment_name: t.environment_name, mode: t.mode,
+  }));
   for (const doc of UI.state.documents) {
     applyState(await api(`/api/documents/${doc.id}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
@@ -437,7 +451,10 @@ function wireControls() {
     const name = $("new-macro-name").value.trim().replace(/^\\/, "");
     if (!name) return;
     const clean = UI.state.documents[0]?.profiles.find((p) => p.name === "clean");
-    const next = [...(clean?.transforms || []), { macro_name: name, mode: $("new-macro-mode").value }];
+    const entry = $("new-macro-kind").value === "environment"
+      ? { environment_name: name, mode: $("new-macro-mode").value }
+      : { macro_name: name, mode: $("new-macro-mode").value };
+    const next = [...(clean?.transforms || []), entry];
     await updateMacros(next);
     $("new-macro-name").value = "";
   };
