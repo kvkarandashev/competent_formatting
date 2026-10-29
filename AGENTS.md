@@ -347,6 +347,8 @@ jcp_submission/
 ├── source.zip       # the same files, no folder inside the archive
 ├── main.pdf         # the author-generated PDF, built from source/ in isolation
 ├── sm.pdf           # with --si
+├── main_marked.pdf  # with --marked_pdf: revision markup kept (changes highlighted)
+├── sm_marked.pdf    # with --marked_pdf and --si
 ├── alt_text.txt     # a draft, one entry per figure and table
 ├── report.md        # checks, figure map, replacements
 └── build/           # the working builds, kept so a failure can be inspected

@@ -52,6 +52,12 @@ def test_the_author_pdf_and_the_sm_pdf_are_produced(packaged):
     assert packaged.sm_pdf_path and Path(packaged.sm_pdf_path).is_file()
 
 
+def test_marked_copies_of_both_documents_are_produced(packaged):
+    assert Path(packaged.marked_pdf_path).name == "main_marked.pdf"
+    assert Path(packaged.sm_marked_pdf_path).name == "sm_marked.pdf"
+    assert Path(packaged.sm_marked_pdf_path).is_file()
+
+
 def test_flattening_did_not_change_the_document(packaged):
     built, verified = packaged.page_counts
     assert built == verified

@@ -194,8 +194,8 @@ def manuscript(tmp_path):
 def packaged(tmp_path_factory):
     """The fixture manuscript, packaged once for the whole integration module.
 
-    Module-scoped because it compiles the manuscript four times over (full build, isolated
-    verification, supplementary material) and every assertion reads the same result.
+    Module-scoped because it compiles the manuscript several times over (full build, isolated
+    verification, supplementary material, marked copies) and every assertion reads the same result.
     """
     from competent_formatting.processing.jcp_source import build_jcp_source
 
@@ -213,4 +213,5 @@ def packaged(tmp_path_factory):
         opened_macros=["rev"],
         removed_macros=["authorcomment"],
         opened_envs=["revblock"],
+        marked_pdf=True,
     )

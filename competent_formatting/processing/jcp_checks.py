@@ -312,6 +312,12 @@ def render_report(result):
         lines.append(f"- author PDF: `{os.path.basename(result.pdf_path)}`")
     if result.sm_pdf_path:
         lines.append(f"- supplementary PDF: `{os.path.basename(result.sm_pdf_path)}`")
+    if result.marked_pdf_path:
+        lines.append(f"- marked PDF: `{os.path.basename(result.marked_pdf_path)}`")
+    if result.sm_marked_pdf_path:
+        lines.append(
+            f"- marked supplementary PDF: `{os.path.basename(result.sm_marked_pdf_path)}`"
+        )
     if result.zip_path:
         lines.append(f"- upload archive: `{os.path.basename(result.zip_path)}`")
     lines.append("")

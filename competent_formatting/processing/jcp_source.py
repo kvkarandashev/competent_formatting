@@ -134,6 +134,7 @@ class JCPSourceResult:
     pdf_path: Optional[str] = None
     sm_pdf_path: Optional[str] = None
     marked_pdf_path: Optional[str] = None
+    sm_marked_pdf_path: Optional[str] = None
     zip_path: Optional[str] = None
     alt_text_path: Optional[str] = None
     report_path: Optional[str] = None
@@ -694,8 +695,8 @@ def build_jcp_source(
     _write(result.alt_text_path, alt_text_draft(main_captions, si_captions))
 
     if marked_pdf:
-        result.marked_pdf_path = _build_marked(
-            root, build_root, out_dir, main_name, stem, result, log
+        result.marked_pdf_path, result.sm_marked_pdf_path = _build_marked(
+            root, build_root, out_dir, main_name, stem, result, log, si=si
         )
 
     if make_archive:
@@ -808,15 +809,41 @@ def _build_supplementary(si, root, full_build, out_dir, result, log, markup):
     return captions(si_cleaned)
 
 
-def _build_marked(root, build_root, out_dir, main_name, stem, result, log):
-    """The manuscript *with* its revision markup, for the 'changes highlighted' upload."""
+def _build_marked(root, build_root, out_dir, main_name, stem, result, log, si=None):
+    """The manuscript *with* its revision markup, for the 'changes highlighted' upload.
+
+    Returns ``(main_marked, sm_marked)``.  With ``si``, the supplementary material is marked
+    too: a revision changes it as much as the main text, and the response to the referees
+    points into both.  It is built after the main document in the same directory, so its
+    ``\\externaldocument`` references resolve against the marked main ``.aux``.
+    """
     log("building the marked copy")
     marked_dir = os.path.join(build_root, MARKED_BUILD)
     copy_project(root, marked_dir, skip_roots=[out_dir])
     built = run_latexmk(main_name, marked_dir)
     if not built.pdf_exists:
         result.add(WARNING, "marked", "the marked copy did not produce a PDF")
-        return None
+        return None, None
     target = os.path.join(out_dir, stem + "_marked.pdf")
     shutil.copy2(built.pdf_path, target)
-    return target
+    if si is None:
+        return target, None
+
+    si_relative = os.path.relpath(os.path.abspath(si), root)
+    if si_relative.startswith(os.pardir):
+        result.add(
+            WARNING,
+            "marked",
+            f"{si} is outside the manuscript directory, so it has no marked copy",
+        )
+        return target, None
+    si_name = os.path.basename(si_relative)
+    si_stem = os.path.splitext(si_name)[0]
+    log(f"building the marked copy of {si_relative}")
+    si_built = run_latexmk(si_name, os.path.join(marked_dir, os.path.dirname(si_relative)))
+    if not si_built.pdf_exists:
+        result.add(WARNING, "marked", f"the marked copy of {si_relative} did not produce a PDF")
+        return target, None
+    si_target = os.path.join(out_dir, si_stem + "_marked.pdf")
+    shutil.copy2(si_built.pdf_path, si_target)
+    return target, si_target

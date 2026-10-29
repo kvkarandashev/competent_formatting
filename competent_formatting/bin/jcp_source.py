@@ -53,7 +53,8 @@ from ..processing.latex_build import MissingExecutableError
 @click.option(
     "--marked_pdf",
     is_flag=True,
-    help="Also compile the uncleaned manuscript to <stem>_marked.pdf (changes highlighted).",
+    help="Also compile the uncleaned manuscript to <stem>_marked.pdf (changes highlighted), "
+    "and with --si the uncleaned supplementary material to <si stem>_marked.pdf.",
 )
 @click.option("--zip/--no-zip", "make_archive", default=True, help="Write source.zip as well.")
 @click.option("--strict", is_flag=True, help="Treat warnings as failures.")
