@@ -65,6 +65,48 @@ def test_a_value_without_a_decimal_point_reserves_the_point():
     assert r"$1\phantom{.}\phantom{0}\phantom{0}\phantom{0}$" in rendered
 
 
+def test_a_value_without_a_decimal_point_still_gets_its_left_padding():
+    r"""The regression this pair of helpers exists to prevent, on the half that used to be lost.
+
+    ``phantom_pad_fraction`` reserves the decimal point of a value written without one, which
+    puts a ``\phantom{.}`` into the string. Padding the integer part afterwards then reads that
+    macro's own "." as the decimal point -- ``integer_numerals("333\phantom{.}\phantom{0}")`` is
+    10, not 3 -- computes a negative pad and adds nothing, so in a column whose widest integer
+    part is wider, every value without a point comes out short on the left and the column's
+    decimal points wander. Here "1" needs two ``\phantom{0}`` to stand under "333".
+    """
+    table = [
+        ["q", "v"],
+        ["a", ReportedFloat("1")],
+        ["b", ReportedFloat("22.5")],
+        ["c", ReportedFloat("333")],
+    ]
+    rendered = latex_table(table, column_types="lc", midrule_positions=[1])
+    assert r"$\phantom{0}\phantom{0}1\phantom{.}\phantom{0}$" in rendered
+    assert r"$\phantom{0}22.5$" in rendered
+    assert r"$333\phantom{.}\phantom{0}$" in rendered
+
+
+def test_left_padding_of_a_point_less_value_survives_an_error_column():
+    r"""The same thing on the ``\pm error`` branch, which assembles its own string.
+
+    The column has to MIX precisions for this to test anything: where no value carries a
+    decimal the fraction padding is a no-op, nothing inserts a ``\phantom{.}``, and the integer
+    padding is correct either way. "12.5" is what forces the point to be reserved on "5" and
+    "123", and that reservation is what used to swallow their left padding.
+    """
+    table = [
+        ["q", "v"],
+        ["a", ReportedFloat("5", "0.1")],
+        ["b", ReportedFloat("12.5", "0.4")],
+        ["c", ReportedFloat("123", "0.25")],
+    ]
+    rendered = latex_table(table, column_types="lc", midrule_positions=[1])
+    assert r"$\phantom{0}\phantom{0}5\phantom{.}\phantom{0}\pm0.1\phantom{0}$" in rendered
+    assert r"$\phantom{0}12.5\pm0.4\phantom{0}$" in rendered
+    assert r"$123\phantom{.}\phantom{0}\pm0.25$" in rendered
+
+
 # ----------------------------------------------------------------------------------------
 # Styles
 # ----------------------------------------------------------------------------------------

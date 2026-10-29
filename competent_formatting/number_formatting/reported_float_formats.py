@@ -98,10 +98,16 @@ class LaTeXReportedFloat(LaTeXNumber):
         mean_numerals=0,
         mean_minus=False,
     ):
-        mean_part = phantom_pad_integer(
-            phantom_pad_fraction(reported_float.mean, mean_decimals),
-            mean_numerals,
-            minus_present=mean_minus,
+        # Integer padding FIRST, on the reported digits, and only then the fraction padding.
+        # The other order is wrong and silently so: phantom_pad_fraction gives a value written
+        # without a decimal point a "\phantom{.}", and integer_numerals then splits on the "."
+        # inside that macro -- integer_numerals("186\phantom{.}\phantom{0}") is 12, not 3 -- so
+        # phantom_pad_integer computes a negative pad and adds nothing. A column mixing "6.15",
+        # "186" and "2920" loses the left padding on every value without a point and its decimal
+        # points wander, which is the failure this pair of helpers exists to prevent.
+        mean_part = phantom_pad_fraction(
+            phantom_pad_integer(reported_float.mean, mean_numerals, minus_present=mean_minus),
+            mean_decimals,
         )
         if reported_float.err is not None:
             return inline_formula(
