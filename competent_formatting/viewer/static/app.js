@@ -17,6 +17,7 @@ const UI = {
   logKind: "live",
   liveLines: [],
   renderToken: 0,
+  native: false,
   pdfDoc: null,
 };
 
@@ -63,8 +64,39 @@ function restoreAnchor(anchor) {
 
 /* ------------------------------------------------------------ pdf rendering */
 
+/* Hand the PDF to the browser's own viewer.
+ *
+ * Canvas rendering gives us the per-page scroll anchor that keeps `full` and `clean` aligned,
+ * but a canvas is a bitmap: no text selection, no hyperref links. This mode trades the anchor
+ * for both, and costs nothing to maintain -- /api/pdf already serves inline application/pdf,
+ * so the browser does the work. The canvas path stays the default.
+ */
+function renderNative() {
+  const frame = $("pdf-native");
+  const url = `/api/pdf/${UI.docId}/${UI.profile}?t=${Date.now()}`;
+  if (frame.getAttribute("src") !== url) frame.setAttribute("src", url);
+  $("pdf-pages").innerHTML = "";
+  $("pdf-pages").hidden = true;
+  frame.hidden = false;
+  document.body.classList.add("native");
+}
+
+function hideNative() {
+  const frame = $("pdf-native");
+  frame.hidden = true;
+  frame.removeAttribute("src");
+  $("pdf-pages").hidden = false;
+  document.body.classList.remove("native");
+}
+
 async function renderPdf(anchor) {
   if (!UI.docId || !UI.profile) return;
+  if (UI.native) {
+    UI.renderToken++;  // cancel any canvas render still walking pages
+    renderNative();
+    return;
+  }
+  hideNative();
   const token = ++UI.renderToken;
   const url = `/api/pdf/${UI.docId}/${UI.profile}?t=${Date.now()}`;
   const host = $("pdf-pages");
@@ -425,6 +457,14 @@ function wireControls() {
     UI.scale = Math.min(3, UI.scale + 0.15); renderBar(); await reloadPdf(); };
   $("zoom-out").onclick = async () => {
     UI.scale = Math.max(0.3, UI.scale - 0.15); renderBar(); await reloadPdf(); };
+  $("toggle-native").onclick = async () => {
+    UI.native = !UI.native;
+    $("toggle-native").classList.toggle("active", UI.native);
+    // Zoom is the canvas renderer's; in native mode the browser owns it.
+    for (const id of ["zoom-in", "zoom-out"]) $(id).disabled = UI.native;
+    await renderPdf(UI.native ? null : captureAnchor());
+  };
+
   $("toggle-log").onclick = () => {
     const panel = $("log-panel");
     panel.hidden = !panel.hidden;
@@ -475,6 +515,7 @@ function wireControls() {
     }
     if (event.key === "r") postJSON("/api/recompile", { target: "all", current: UI.docId });
     if (event.key === "l") $("toggle-log").click();
+    if (event.key === "t") $("toggle-native").click();
   });
 }
 

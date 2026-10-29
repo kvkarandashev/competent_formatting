@@ -19,6 +19,8 @@
     <button id="zoom-in" title="Zoom in">+</button>
   </span>
   <span class="sep"></span>
+  <button id="toggle-native" title="Browser PDF viewer: selectable text, clickable links, find (t)">text</button>
+  <span class="sep"></span>
   <span class="group" id="recompile-group"></span>
   <span class="spacer"></span>
   <span id="status" class="status">idle</span>
@@ -27,7 +29,7 @@
 </header>
 
 <main>
-  <div id="pdf-scroll"><div id="pdf-pages"></div></div>
+  <div id="pdf-scroll"><div id="pdf-pages"></div><iframe id="pdf-native" title="PDF" hidden></iframe></div>
   <aside id="log-panel" hidden>
     <div class="panel-head">
       <span class="group" id="log-tabs">
