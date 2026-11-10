@@ -12,6 +12,8 @@ spec for) arrives with an empty argument list, with its group following as a sib
 which is why an unknown special macro consumes the *next* node instead of its own argument.
 """
 
+import re
+
 from pylatexenc.latexwalker import (
     LatexCharsNode,
     LatexEnvironmentNode,
@@ -19,6 +21,8 @@ from pylatexenc.latexwalker import (
     LatexMacroNode,
     LatexWalker,
 )
+
+from .latex_spans import code_spans
 
 MACRO_DEFINITIONS = ("newcommand", "renewcommand", "providecommand")
 ENVIRONMENT_DEFINITIONS = ("newenvironment", "renewenvironment")
@@ -65,6 +69,22 @@ def defined_name(node):
     if isinstance(first, LatexCharsNode):
         return first.chars.strip() or None
     return None
+
+
+def without_delimiter_lines(node, body):
+    """``body`` of an opened environment, less the lines its ``\\begin``/``\\end`` stood alone on.
+
+    Deleting just the macro from such a line leaves it blank, and to TeX a blank line is a
+    paragraph break the author never wrote: the next line gets indented, or a display moves.
+    """
+    source = node.parsing_state.s
+    if not source[source.rfind("\n", 0, node.pos) + 1 : node.pos].strip():
+        body = re.sub(r"\A[ \t]*\n", "", body)
+    end = node.pos + node.len
+    line_end = source.find("\n", end)
+    if not source[end : len(source) if line_end == -1 else line_end].strip():
+        body = re.sub(r"\n[ \t]*\Z", "", body)
+    return body
 
 
 class ProcessedNodeIterator:
@@ -163,7 +183,8 @@ class ProcessedNodeIterator:
         if environmentname in self.opened_envs:
             # Only the body: \begin/\end go, and so do the environment's own arguments --
             # \begin{revblock}[opt] has no meaning once the environment itself is gone.
-            return self.get_full_child_str(current_node.nodelist)
+            body = self.get_full_child_str(current_node.nodelist)
+            return without_delimiter_lines(current_node, body)
         brenvname = "{" + environmentname + "}"
         return (
             "\\begin"
@@ -231,3 +252,39 @@ def remove_macros(latex_str, **kwargs):
     """
     nodes, _, _ = LatexWalker(latex_str).get_latex_nodes()
     return ProcessedNodeIterator(nodes, **kwargs).get_full_str()
+
+
+def leftover_markup(text, macros=(), environments=()):
+    """The stripped names that still appear in live code -- markup the walk did not recognise."""
+    leftovers = []
+    for span in code_spans(text):
+        chunk = text[span.start : span.end]
+        for name in sorted(macros):
+            if re.search(r"\\" + re.escape(name) + r"(?![a-zA-Z@])", chunk):
+                leftovers.append(f"\\{name}")
+        for name in sorted(environments):
+            if re.search(r"\\(begin|end)\s*\{" + re.escape(name) + r"\}", chunk):
+                leftovers.append(f"{name} environment")
+    return sorted(set(leftovers))
+
+
+def clean_markup(text, opened_macros=(), removed_macros=(), opened_envs=(), removed_envs=()):
+    """Strip revision markup, then prove none of it is left: ``(cleaned, leftovers)``.
+
+    ``leftovers`` names every stripped macro or environment still present in live code; an
+    empty list is the proof. Raises :class:`IncompleteSpecialMacro` on unbalanced markup.
+    """
+    if not any([opened_macros, removed_macros, opened_envs, removed_envs]):
+        return text, []
+    cleaned = remove_macros(
+        text,
+        opened_fields=list(opened_macros),
+        removed_fields=list(removed_macros),
+        opened_envs=list(opened_envs),
+        removed_envs=list(removed_envs),
+    )
+    return cleaned, leftover_markup(
+        cleaned,
+        macros=set(opened_macros) | set(removed_macros),
+        environments=set(opened_envs) | set(removed_envs),
+    )

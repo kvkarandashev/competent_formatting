@@ -1,4 +1,8 @@
-"""Flattening, comment stripping and figure renaming -- no TeX installation needed."""
+"""Flattening, comment stripping and figure renaming -- TeX only for the spacing comparison."""
+
+import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -69,7 +73,7 @@ def test_nested_inputs_are_inlined_with_provenance(tmp_path):
     assert "Start" in flat.text and "Second section." in flat.text
     assert "\\input" not in flat.text
     assert flat.inputs == ["sections/one.tex", "sections/two.tex"]
-    line = flat.text.splitlines().index("Second section.") + 1
+    line = next(n for n, text in enumerate(flat.text.splitlines(), 1) if "Second" in text)
     assert flat.origin_of_line(line) == ("sections/two.tex", 1)
 
 
@@ -108,7 +112,72 @@ def test_an_unsupported_input_mechanism_is_refused(tmp_path):
 def test_text_around_an_inline_input_keeps_its_line(tmp_path):
     write(tmp_path, "mid.tex", "MIDDLE")
     main = write(tmp_path, "main.tex", "before \\input{mid} after\n")
-    assert flatten(main).text.splitlines()[0] == "before MIDDLE after"
+    assert flatten(main).text.splitlines()[0] == "before MIDDLE \\space after"
+
+
+def test_a_comment_ending_an_inlined_file_does_not_swallow_the_rest_of_the_line(tmp_path):
+    write(tmp_path, "mid.tex", "MIDDLE%\n")
+    main = write(tmp_path, "main.tex", "\\input{mid}after\n")
+    assert flatten(main).text.splitlines() == ["MIDDLE%", "after"]
+
+
+def test_an_input_followed_by_a_comment_needs_no_space_token(tmp_path):
+    write(tmp_path, "mid.tex", "MIDDLE\n")
+    main = write(tmp_path, "main.tex", "\\input{mid}%\nnext\n")
+    assert flatten(main).text.splitlines() == ["MIDDLE %", "next"]
+
+
+# What TeX sets from the original and from the flat text, compared by box width: a space lost or
+# invented in flattening shows up here and in nothing else short of comparing PDFs.
+SPACING_CASES = {
+    "alone_on_its_line": ("x\n", "a\\input{inc}\nb"),
+    "text_after": ("x\n", "a\\input{inc}b"),
+    "space_then_text": ("x\n", "a\\input{inc} b"),
+    "trailing_spaces": ("x\n", "a\\input{inc}   \nb"),
+    "no_final_newline": ("x", "a\\input{inc}\nb"),
+    "comment_after_input": ("x\n", "a\\input{inc}%\nb"),
+    "comment_ending_file": ("x%\n", "a\\input{inc}\nb"),
+    "comment_ending_file_text_after": ("x%\n", "a\\input{inc} b"),
+    "comment_line_ending_file": ("x\n% end\n", "a\\input{inc}\nb"),
+    "control_word_ending_file": ("\\relax\n", "a\\input{inc}\nb"),
+    "empty_file": ("", "a\\input{inc}\nb"),
+    "two_inputs": ("x\n", "a\\input{inc}\\input{inc}\nb"),
+    "two_inputs_spaced": ("x\n", "a\\input{inc} \\input{inc}\nb"),
+    "nested": ("\\input{leaf}\n", "a\\input{inc}\nb"),
+    "tabular": (
+        "\\begin{tabular}{c}x\\end{tabular}\n",
+        "a\\input{inc}\nb",
+    ),
+}
+
+
+def _box_width(tex_file):
+    run = subprocess.run(
+        ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", tex_file.name],
+        cwd=tex_file.parent,
+        capture_output=True,
+        text=True,
+    )
+    width = re.search(r"WIDTH=([\d.]+)pt", run.stdout)
+    assert width, run.stdout[-1500:]
+    return float(width.group(1))
+
+
+@pytest.mark.skipif(shutil.which("pdflatex") is None, reason="pdflatex not installed")
+@pytest.mark.parametrize("keep_comments", [False, True])
+@pytest.mark.parametrize("case", SPACING_CASES)
+def test_flattening_preserves_what_tex_sets(tmp_path, case, keep_comments):
+    included, body = SPACING_CASES[case]
+    document = (
+        "\\documentclass{article}\\begin{document}\n\\setbox0=\\hbox{\n"
+        + body
+        + "\n}\\typeout{WIDTH=\\the\\wd0}\n\\end{document}\n"
+    )
+    write(tmp_path, "inc.tex", included)
+    write(tmp_path, "leaf.tex", "x\n")
+    main = write(tmp_path, "main.tex", document)
+    flat = write(tmp_path, "flat.tex", flatten(main, keep_comments=keep_comments).text)
+    assert _box_width(flat) == _box_width(main)
 
 
 def test_comments_can_be_kept(tmp_path):

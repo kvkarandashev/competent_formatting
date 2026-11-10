@@ -10,7 +10,6 @@ make the uploaded package fail to build or be rejected on sight; a warning is so
 author should look at but may legitimately decide to keep.
 """
 
-import os
 import re
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -301,88 +300,3 @@ def check_float_citation_order(text):
                 )
             )
     return checks
-
-
-def render_report(result):
-    """The ``report.md`` the CLI also prints."""
-    lines = [f"# JCP source package: {os.path.basename(result.main_name)}", ""]
-    lines.append(f"- output directory: `{result.out_dir}`")
-    lines.append(f"- flat source: `{os.path.join('source', result.main_name)}`")
-    if result.pdf_path:
-        lines.append(f"- author PDF: `{os.path.basename(result.pdf_path)}`")
-    if result.sm_pdf_path:
-        lines.append(f"- supplementary PDF: `{os.path.basename(result.sm_pdf_path)}`")
-    if result.marked_pdf_path:
-        lines.append(f"- marked PDF: `{os.path.basename(result.marked_pdf_path)}`")
-    if result.sm_marked_pdf_path:
-        lines.append(
-            f"- marked supplementary PDF: `{os.path.basename(result.sm_marked_pdf_path)}`"
-        )
-    if result.zip_path:
-        lines.append(f"- upload archive: `{os.path.basename(result.zip_path)}`")
-    lines.append("")
-
-    errors = [check for check in result.checks if check.level == ERROR]
-    warnings = [check for check in result.checks if check.level == WARNING]
-    infos = [check for check in result.checks if check.level == INFO]
-
-    lines.append(
-        f"**{'FAILED' if errors else 'PASSED'}** "
-        f"-- {len(errors)} hard failure(s), {len(warnings)} warning(s)."
-    )
-    lines.append("")
-
-    for title, group in (
-        ("Hard failures", errors),
-        ("Warnings", warnings),
-        ("Notes", infos),
-    ):
-        if not group:
-            continue
-        lines.append(f"## {title}")
-        lines.append("")
-        for check in group:
-            lines.append(f"- **{check.category}**: {check.message}")
-        lines.append("")
-
-    if result.figure_map:
-        lines += ["## Figures", "", "| source | shipped as |", "|---|---|"]
-        for original, new in result.figure_map:
-            lines.append(f"| `{original}` | `{new}` |")
-        lines.append("")
-
-    if result.replacements:
-        lines += ["## Non-ASCII characters replaced", ""]
-        grouped = {}
-        for replacement in result.replacements:
-            grouped.setdefault(replacement.source or "(flat document)", []).append(replacement)
-        for source in sorted(grouped):
-            lines.append(f"- `{source}`")
-            for replacement in grouped[source]:
-                lines.append(
-                    f"  - U+{ord(replacement.character):04X} `{replacement.character}` -> "
-                    f"`{replacement.replacement}`"
-                )
-        lines += [
-            "",
-            "These were fixed in the shipped copy only. The originals still hold them, so the",
-            "same replacements will be needed again unless the `.tex`/`.bib` are corrected.",
-            "",
-        ]
-
-    if result.page_counts:
-        built, verified = result.page_counts
-        lines += [
-            "## Page counts",
-            "",
-            f"- full build (BibTeX): {built}",
-            f"- verified flat build (pdflatex only): {verified}",
-            "",
-        ]
-
-    if result.bibtex_warnings:
-        lines += ["## BibTeX warnings", ""]
-        lines += [f"- {warning}" for warning in result.bibtex_warnings]
-        lines.append("")
-
-    return "\n".join(lines) + "\n"

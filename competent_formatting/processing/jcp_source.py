@@ -22,20 +22,11 @@ directory, bibliography inlined from the ``.bbl``, no ``.bib`` shipped.
 import os
 import re
 import shutil
-import zipfile
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Optional, Tuple
 
-from .flatten import (
-    FlattenError,
-    assign_graphic_names,
-    find_graphics,
-    flatten,
-    graphicspath_directories,
-    remove_spans,
-    resolve_graphic,
-    rewrite_graphics,
-)
+from . import source_package
+from .external_labels import find_external_documents
 from .jcp_checks import (
     ERROR,
     INFO,
@@ -43,7 +34,6 @@ from .jcp_checks import (
     MAX_FIGURE_WIDTH_CM,
     MIN_RASTER_DPI,
     WARNING,
-    Check,
     alt_text_draft,
     captions,
     check_class,
@@ -51,323 +41,102 @@ from .jcp_checks import (
     check_float_citation_order,
     lint_prose,
     parse_class_and_packages,
+)
+from .latex_build import pdf_page_size_cm, require_executable, run_latexmk, unembedded_fonts
+from .source_package import (  # noqa: F401  (re-exported: the JCP API predates the split)
+    BUILD_DIRNAME,
+    FULL_BUILD,
+    REPORT_NAME,
+    SOURCE_DIRNAME,
+    VERIFY_BUILD,
+    ZIP_NAME,
+    Markup,
+    SourcePackageError,
+    SourcePackageResult,
+    SourcePackageUsageError,
+    collect_figures,
+    compare_page_counts,
+    copy_project,
+    drop_bibliographystyle,
+    find_bibliography,
+    full_build,
+    inline_bibliography,
+    make_zip,
+    prepare_document,
+    read_text,
     render_report,
+    ship_local_styles,
+    splice_bibliography,
+    verify_in_isolation,
+    write_text,
 )
-from .latex_build import (
-    bibtex_warnings,
-    have_executable,
-    kpsewhich,
-    pdf_page_count,
-    pdf_page_size_cm,
-    require_executable,
-    run_latexmk,
-    run_pdflatex,
-    unembedded_fonts,
-)
-from .latex_spans import code_spans
-from .macro_removal import IncompleteSpecialMacro, remove_macros
-from .unicode_ascii import UnmappedCharacterError, to_ascii
 
-SOURCE_DIRNAME = "source"
-BUILD_DIRNAME = "build"
-FULL_BUILD = "full"
-VERIFY_BUILD = "verify"
 MARKED_BUILD = "marked"
 ALT_TEXT_NAME = "alt_text.txt"
-REPORT_NAME = "report.md"
-ZIP_NAME = "source.zip"
 
-# Top-level names this tool writes. --force only ever removes these, so pointing --out at a
-# directory that holds something else fails instead of deleting the user's work.
+# Top-level names this tool writes. --force only ever removes these.
 ARTIFACT_NAMES = {SOURCE_DIRNAME, BUILD_DIRNAME, ALT_TEXT_NAME, REPORT_NAME, ZIP_NAME}
 
-# Never copied into the build tree: compiler droppings, and the project's own latexmkrc,
-# whose custom dependencies (an \externaldocument rule, say) would run sub-builds we do not
-# want and the journal would not have.
-AUX_SUFFIXES = {
-    ".aux",
-    ".bbl",
-    ".bcf",
-    ".blg",
-    ".fdb_latexmk",
-    ".fls",
-    ".lof",
-    ".lot",
-    ".nav",
-    ".out",
-    ".run.xml",
-    ".snm",
-    ".synctex.gz",
-    ".toc",
-    ".vrb",
-}
-SKIP_NAMES = {"latexmkrc", ".latexmkrc"}
-SKIP_DIRS = {".git", "__pycache__", ".ipynb_checkpoints", ".cf_view"}
-
-OVERFULL_REPORT_THRESHOLD_PT = 10.0
-
-_BIBLIOGRAPHY = re.compile(r"\\bibliography\s*\{([^}]*)\}")
-_BIBLIOGRAPHYSTYLE = re.compile(r"\\bibliographystyle\s*\{([^}]*)\}")
-_BIBLATEX = re.compile(r"\\(addbibresource|printbibliography)\b")
+# The packaging machinery is shared with cf_arxiv_source (source_package.py); these names are
+# what the JCP side has always raised.
+JCPSourceError = SourcePackageError
+JCPUsageError = SourcePackageUsageError
 
 
-class JCPSourceError(Exception):
-    """A condition that stops the pipeline: the package cannot be assembled at all."""
-
-
-class JCPUsageError(JCPSourceError):
-    """Wrong arguments or a missing tool -- the user's input, not the manuscript's content.
-
-    Kept apart so the CLI can exit 2 (usage) rather than 1 (a check failed): the difference
-    matters to whoever is reading the exit code in a script.
-    """
-
-
-@dataclass
-class JCPSourceResult:
-    out_dir: str
+@dataclass(kw_only=True)
+class JCPSourceResult(SourcePackageResult):
     main_name: str
-    checks: List[Check] = field(default_factory=list)
-    figure_map: List[Tuple[str, str]] = field(default_factory=list)
-    replacements: list = field(default_factory=list)
-    bibtex_warnings: List[str] = field(default_factory=list)
     pdf_path: Optional[str] = None
     sm_pdf_path: Optional[str] = None
     marked_pdf_path: Optional[str] = None
     sm_marked_pdf_path: Optional[str] = None
-    zip_path: Optional[str] = None
     alt_text_path: Optional[str] = None
-    report_path: Optional[str] = None
     page_counts: Optional[Tuple[Optional[int], Optional[int]]] = None
 
     @property
-    def source_dir(self):
-        return os.path.join(self.out_dir, SOURCE_DIRNAME)
+    def report_title(self):
+        return f"JCP source package: {os.path.basename(self.main_name)}"
 
-    @property
-    def hard_failures(self):
-        return [check for check in self.checks if check.level == ERROR]
+    def report_header(self):
+        lines = [f"- output directory: `{self.out_dir}`"]
+        lines.append(f"- flat source: `{os.path.join('source', self.main_name)}`")
+        if self.pdf_path:
+            lines.append(f"- author PDF: `{os.path.basename(self.pdf_path)}`")
+        if self.sm_pdf_path:
+            lines.append(f"- supplementary PDF: `{os.path.basename(self.sm_pdf_path)}`")
+        if self.marked_pdf_path:
+            lines.append(f"- marked PDF: `{os.path.basename(self.marked_pdf_path)}`")
+        if self.sm_marked_pdf_path:
+            lines.append(
+                f"- marked supplementary PDF: `{os.path.basename(self.sm_marked_pdf_path)}`"
+            )
+        if self.zip_path:
+            lines.append(f"- upload archive: `{os.path.basename(self.zip_path)}`")
+        return lines
 
-    @property
-    def warnings(self):
-        return [check for check in self.checks if check.level == WARNING]
-
-    @property
-    def passed(self):
-        return not self.hard_failures
-
-    def add(self, level, category, message):
-        self.checks.append(Check(level, category, message))
-
-
-def _skip_path(relative):
-    parts = relative.split(os.sep)
-    if any(part in SKIP_DIRS for part in parts):
-        return True
-    if parts[-1] in SKIP_NAMES:
-        return True
-    return any(parts[-1].endswith(suffix) for suffix in AUX_SUFFIXES)
-
-
-def copy_project(root, destination, skip_roots=()):
-    """Copy the manuscript tree, minus compiler artifacts and the project's latexmkrc."""
-    skip_roots = [os.path.realpath(path) for path in skip_roots]
-    os.makedirs(destination, exist_ok=True)
-    for directory, subdirectories, names in os.walk(root):
-        subdirectories[:] = [
-            name
-            for name in subdirectories
-            if name not in SKIP_DIRS
-            and os.path.realpath(os.path.join(directory, name)) not in skip_roots
+    def report_footer(self):
+        if not self.page_counts:
+            return []
+        built, verified = self.page_counts
+        return [
+            "## Page counts",
+            "",
+            f"- full build (BibTeX): {built}",
+            f"- verified flat build (pdflatex only): {verified}",
+            "",
         ]
-        for name in names:
-            source = os.path.join(directory, name)
-            relative = os.path.relpath(source, root)
-            if _skip_path(relative):
-                continue
-            target = os.path.join(destination, relative)
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            shutil.copy2(source, target)
 
 
 def prepare_out_dir(out_dir, project_root, force=False):
-    """Create (or clear) the output directory, refusing anything that could destroy work."""
-    out_dir = os.path.abspath(out_dir)
-    project_root = os.path.abspath(project_root)
-    if out_dir == project_root:
-        raise JCPUsageError(
-            f"--out {out_dir} is the manuscript directory itself; pick a separate directory"
-        )
-    if os.path.commonpath([out_dir, project_root]) == out_dir:
-        raise JCPUsageError(
-            f"--out {out_dir} contains the manuscript directory; pick a separate directory"
-        )
-    if os.path.exists(out_dir):
-        existing = sorted(os.listdir(out_dir))
-        if existing and not force:
-            raise JCPUsageError(
-                f"--out {out_dir} is not empty; pass --force to replace what is in it"
-            )
-        unknown = [
-            name for name in existing if name not in ARTIFACT_NAMES and not name.endswith(".pdf")
-        ]
-        if unknown:
-            raise JCPUsageError(
-                f"--out {out_dir} holds files this tool did not write ({', '.join(unknown[:5])}"
-                f"{', ...' if len(unknown) > 5 else ''}); delete it yourself if that is intended"
-            )
-        for name in existing:
-            path = os.path.join(out_dir, name)
-            shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
-    os.makedirs(out_dir, exist_ok=True)
-    return out_dir
+    """Create (or clear) the output directory; see :func:`.source_package.prepare_out_dir`."""
+    return source_package.prepare_out_dir(out_dir, project_root, ARTIFACT_NAMES, force=force)
 
 
-def clean_markup(text, opened_macros, removed_macros, opened_envs, removed_envs):
-    """Strip revision markup, then prove none of it is left."""
-    if not any([opened_macros, removed_macros, opened_envs, removed_envs]):
-        return text, []
-    try:
-        cleaned = remove_macros(
-            text,
-            opened_fields=list(opened_macros),
-            removed_fields=list(removed_macros),
-            opened_envs=list(opened_envs),
-            removed_envs=list(removed_envs),
-        )
-    except IncompleteSpecialMacro as error:
-        raise JCPSourceError(f"revision markup is unbalanced: {error}") from error
-
-    leftovers = []
-    names = set(opened_macros) | set(removed_macros)
-    environments = set(opened_envs) | set(removed_envs)
-    for span in code_spans(cleaned):
-        chunk = cleaned[span.start : span.end]
-        for name in sorted(names):
-            if re.search(r"\\" + re.escape(name) + r"(?![a-zA-Z@])", chunk):
-                leftovers.append(f"\\{name}")
-        for name in sorted(environments):
-            if re.search(r"\\(begin|end)\s*\{" + re.escape(name) + r"\}", chunk):
-                leftovers.append(f"{name} environment")
-    return cleaned, sorted(set(leftovers))
-
-
-def remap_origins(old_lines, new_lines, old_origins):
-    """Carry per-line provenance across a rewrite that changed some lines.
-
-    Macro removal shortens or deletes lines, so the line numbers of the cleaned text no
-    longer index the flattened one. A line diff recovers the mapping exactly where lines
-    survived untouched, which is everywhere the author will be asked to look.
-    """
-    from difflib import SequenceMatcher
-
-    origins = [None] * len(new_lines)
-    matcher = SequenceMatcher(a=old_lines, b=new_lines, autojunk=False)
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == "equal":
-            for offset in range(j2 - j1):
-                if i1 + offset < len(old_origins):
-                    origins[j1 + offset] = old_origins[i1 + offset]
-        else:
-            fallback = old_origins[i1] if i1 < len(old_origins) else None
-            for index in range(j1, j2):
-                origins[index] = fallback
-    return origins
-
-
-def _origin_lookup(origins):
-    def lookup(line_number):
-        index = line_number - 1
-        if 0 <= index < len(origins):
-            return origins[index]
-        return None
-
-    return lookup
-
-
-def find_bibliography(text):
-    """``(span, databases)`` of the single ``\\bibliography`` command, or ``(None, [])``."""
-    matches = []
-    for span in code_spans(text):
-        for match in _BIBLIOGRAPHY.finditer(text, span.start, span.end):
-            matches.append(match)
-        if _BIBLATEX.search(text, span.start, span.end):
-            raise JCPSourceError(
-                "biblatex (\\addbibresource/\\printbibliography) is not supported: AIP's "
-                "pipeline expects BibTeX via RevTeX/natbib"
-            )
-    if not matches:
-        return None, []
-    if len(matches) > 1:
-        raise JCPSourceError(
-            f"{len(matches)} \\bibliography commands found; a flat submission needs exactly one"
-        )
-    match = matches[0]
-    return (match.start(), match.end()), [
-        name.strip() for name in match.group(1).split(",") if name.strip()
-    ]
-
-
-def inline_bibliography(text, span, bbl_text):
-    """Splice the ``.bbl`` in where ``\\bibliography`` was, literally.
-
-    Literal is the whole point: a ``.bbl`` is dense with backslashes, and ``re.sub`` would
-    read ``\\1`` or ``\\g<0>`` in a title as a replacement-group reference and corrupt the
-    bibliography. Slicing cannot.
-    """
-    return text[: span[0]] + bbl_text.rstrip("\n") + text[span[1] :]
-
-
-def drop_bibliographystyle(text):
-    spans = []
-    for span in code_spans(text):
-        for match in _BIBLIOGRAPHYSTYLE.finditer(text, span.start, span.end):
-            spans.append((match.start(), match.end()))
-    return remove_spans(text, spans)
-
-
-def _ship_local_bst(text, root, source_dir, result):
-    """A ``.bst`` living in the project travels with a separately shipped ``.bbl``.
-
-    Only then: with the bibliography inlined, nothing re-runs BibTeX and the style file is
-    dead weight.
-    """
-    for match in _BIBLIOGRAPHYSTYLE.finditer(text):
-        name = match.group(1).strip()
-        local = os.path.join(root, name + ".bst")
-        if os.path.isfile(local):
-            shutil.copy2(local, os.path.join(source_dir, name + ".bst"))
-            result.add(INFO, "bibliography", f"shipped the project's own {name}.bst")
-
-
-def collect_figures(text, root, source_dir, prefix, result):
-    """Copy every graphic into the flat source directory and rewrite the references."""
-    directories, graphicspath_spans = graphicspath_directories(text)
-    uses = find_graphics(text)
-    resolved = []
-    for use in uses:
-        path = resolve_graphic(use.path, root, directories)
-        if path is None:
-            raise JCPSourceError(
-                f"\\includegraphics{{{use.path}}}: no such file under {root}"
-                + (f" or in \\graphicspath {directories}" if directories else "")
-            )
-        resolved.append(path)
-
-    names = assign_graphic_names(uses, resolved, prefix=prefix)
-    copied = {}
-    for index, use in enumerate(uses):
-        source = resolved[index]
-        name = names[index]
-        if name in copied:
-            continue
-        copied[name] = source
-        shutil.copy2(source, os.path.join(source_dir, name))
-        result.figure_map.append((os.path.relpath(source, root), name))
-        _check_figure(source, name, use, result)
-
-    text = rewrite_graphics(text, uses, names)
-    return remove_spans(text, graphicspath_spans)
+def check_packages(parsed, root, source_dir, result):
+    """Ship local style files, and warn about packages the journal may not have."""
+    result.checks += check_class(parsed)
+    result.checks += check_duplicate_packages(parsed)
+    ship_local_styles(parsed, root, source_dir, result)
 
 
 def _check_figure(path, name, use, result):
@@ -474,52 +243,6 @@ def _check_flat_layout(source_dir, result):
             )
 
 
-def check_packages(parsed, root, source_dir, result):
-    """Ship local style files, and warn about packages the journal may not have."""
-    result.checks += check_class(parsed)
-    result.checks += check_duplicate_packages(parsed)
-    local = []
-    for name, extension in [(parsed.name, ".cls")] + [
-        (package, ".sty") for package in dict.fromkeys(parsed.packages)
-    ]:
-        if not name:
-            continue
-        local_path = os.path.join(root, name + extension)
-        if os.path.isfile(local_path):
-            shutil.copy2(local_path, os.path.join(source_dir, name + extension))
-            local.append(name + extension)
-            continue
-        if kpsewhich(name + extension) is None and have_executable("kpsewhich"):
-            result.add(
-                WARNING,
-                "packages",
-                f"{name}{extension} is neither in the project nor in this TeX installation; "
-                "the journal's installation may not have it either",
-            )
-    for name in local:
-        result.add(INFO, "packages", f"shipped the project's own {name}")
-
-
-def _write(path, text):
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(text)
-
-
-def _read(path):
-    with open(path, "r", encoding="utf-8", errors="strict") as handle:
-        return handle.read()
-
-
-def make_zip(source_dir, zip_path):
-    """A flat archive: the files, with no directory component inside the zip."""
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        for name in sorted(os.listdir(source_dir)):
-            path = os.path.join(source_dir, name)
-            if os.path.isfile(path):
-                archive.write(path, arcname=name)
-    return zip_path
-
-
 def build_jcp_source(
     main_tex,
     out_dir,
@@ -552,6 +275,9 @@ def build_jcp_source(
     root = os.path.dirname(main_tex)
     main_name = os.path.basename(main_tex)
     stem = os.path.splitext(main_name)[0]
+    markup = Markup(
+        tuple(opened_macros), tuple(removed_macros), tuple(opened_envs), tuple(removed_envs)
+    )
 
     out_dir = prepare_out_dir(out_dir, root, force=force)
     source_dir = os.path.join(out_dir, SOURCE_DIRNAME)
@@ -559,94 +285,38 @@ def build_jcp_source(
     build_root = os.path.join(out_dir, BUILD_DIRNAME)
     result = JCPSourceResult(out_dir=out_dir, main_name=main_name)
 
-    # 1. flatten -------------------------------------------------------------------
+    # 1-3. flatten, strip revision markup, non-ASCII with provenance ---------------
     log("flattening " + main_name)
-    try:
-        flat = flatten(main_tex, root=root, keep_comments=keep_comments)
-    except FlattenError as error:
-        raise JCPSourceError(str(error)) from error
-    for inlined in dict.fromkeys(flat.inputs):
-        result.add(INFO, "flatten", f"inlined {inlined}")
-
-    # 2. revision markup -----------------------------------------------------------
-    cleaned, leftovers = clean_markup(
-        flat.text, opened_macros, removed_macros, opened_envs, removed_envs
-    )
-    for leftover in leftovers:
-        result.add(
-            ERROR,
-            "markup",
-            f"{leftover} still appears after cleaning; it is probably used in a way the "
-            "stripper did not recognise (check for an unbalanced brace)",
+    cleaned = prepare_document(main_tex, root, markup, result, keep_comments=keep_comments)
+    if find_external_documents(cleaned):
+        raise JCPSourceError(
+            "\\externaldocument -- the main file cannot reference another document"
         )
-    origins = remap_origins(flat.text.splitlines(), cleaned.splitlines(), flat.origins)
-
-    # 3. non-ASCII, with the provenance the author needs ---------------------------
-    try:
-        cleaned, replacements = to_ascii(cleaned, origin_of_line=_origin_lookup(origins))
-    except UnmappedCharacterError as error:
-        raise JCPSourceError(error.render()) from error
-    result.replacements += replacements
 
     # 4. full build, for the .bbl and the reference page count ----------------------
-    full_build = os.path.join(build_root, FULL_BUILD)
-    log("building with latexmk (BibTeX) in " + os.path.relpath(full_build, out_dir))
-    copy_project(root, full_build, skip_roots=[out_dir])
-    _write(os.path.join(full_build, main_name), cleaned)
-    full = run_latexmk(main_name, full_build)
-    result.bibtex_warnings = bibtex_warnings(full_build, stem)
-    built_pages = pdf_page_count(full.pdf_path) if full.pdf_exists else None
-    if not full.pdf_exists:
-        result.add(
-            ERROR,
-            "build",
-            "the cleaned manuscript did not compile in the full build; "
-            f"{'; '.join(full.log.errors[:3]) or 'see ' + full_build}",
-        )
+    full_dir = os.path.join(build_root, FULL_BUILD)
+    log("building with latexmk (BibTeX) in " + os.path.relpath(full_dir, out_dir))
+    copy_project(root, full_dir, skip_roots=[out_dir])
+    write_text(os.path.join(full_dir, main_name), cleaned)
+    _, built_pages = full_build(main_name, full_dir, result)
 
     # 5. figures -------------------------------------------------------------------
     log("collecting figures")
-    cleaned = collect_figures(cleaned, root, source_dir, figure_prefix, result)
+    cleaned = collect_figures(
+        cleaned, root, source_dir, figure_prefix, result, check_figure=_check_figure
+    )
 
     # 6. bibliography --------------------------------------------------------------
-    span, databases = find_bibliography(cleaned)
-    bbl_path = os.path.join(full_build, stem + ".bbl")
-    if span is not None:
-        if not os.path.isfile(bbl_path):
-            result.add(
-                ERROR,
-                "bibliography",
-                f"BibTeX produced no {stem}.bbl, so the bibliography cannot be shipped; the "
-                f"databases referenced are {', '.join(databases) or '(none)'}",
-            )
-        elif bbl == "inline":
-            bbl_text = _read(bbl_path)
-            bbl_text, bbl_replacements = to_ascii(bbl_text)
-            for replacement in bbl_replacements:
-                replacement.source = f"{stem}.bbl (from {', '.join(databases)})"
-            result.replacements += bbl_replacements
-            cleaned = inline_bibliography(cleaned, span, bbl_text)
-            cleaned = drop_bibliographystyle(cleaned)
-            result.add(INFO, "bibliography", f"inlined {stem}.bbl; no .bib is shipped")
-        else:
-            shutil.copy2(bbl_path, os.path.join(source_dir, stem + ".bbl"))
-            _ship_local_bst(cleaned, root, source_dir, result)
-            result.add(
-                INFO,
-                "bibliography",
-                f"shipped {stem}.bbl beside the source; \\bibliography is kept and no .bib is "
-                "shipped (pdflatex reads the .bbl directly)",
-            )
-    else:
-        result.add(WARNING, "bibliography", "no \\bibliography command found")
+    cleaned = splice_bibliography(
+        cleaned, os.path.join(full_dir, stem + ".bbl"), bbl, root, source_dir, result
+    )
 
     # 7. class, packages, local style files ----------------------------------------
-    parsed = parse_class_and_packages(cleaned)
-    check_packages(parsed, root, source_dir, result)
+    check_packages(parse_class_and_packages(cleaned), root, source_dir, result)
 
     # 8. write the flat source -----------------------------------------------------
     flat_path = os.path.join(source_dir, main_name)
-    _write(flat_path, cleaned)
+    write_text(flat_path, cleaned)
     _verify_ascii(cleaned, flat_path, result)
     _check_flat_layout(source_dir, result)
 
@@ -656,22 +326,11 @@ def build_jcp_source(
 
     # 10. the guarantee: compile the shipped files, alone, with pdflatex only -------
     log("verifying the package in an empty directory (pdflatex only)")
-    verify_dir = os.path.join(build_root, VERIFY_BUILD)
-    os.makedirs(verify_dir, exist_ok=True)
-    for name in sorted(os.listdir(source_dir)):
-        shutil.copy2(os.path.join(source_dir, name), os.path.join(verify_dir, name))
-    _prepare_eps(verify_dir, result)
-    verified = run_pdflatex(main_name, verify_dir, runs=2)
-    _report_verification(verified, result)
-    verified_pages = pdf_page_count(verified.pdf_path) if verified.pdf_exists else None
+    verified, verified_pages = verify_in_isolation(
+        source_dir, os.path.join(build_root, VERIFY_BUILD), [main_name], result
+    )[main_name]
     result.page_counts = (built_pages, verified_pages)
-    if built_pages and verified_pages and built_pages != verified_pages:
-        result.add(
-            WARNING,
-            "verify",
-            f"the flat package compiles to {verified_pages} pages but the full build gave "
-            f"{built_pages}; something changed during flattening",
-        )
+    compare_page_counts(built_pages, verified_pages, result)
     if verified.pdf_exists:
         result.pdf_path = os.path.join(out_dir, stem + ".pdf")
         shutil.copy2(verified.pdf_path, result.pdf_path)
@@ -680,19 +339,11 @@ def build_jcp_source(
     main_captions = captions(cleaned)
     si_captions = []
     if si is not None:
-        si_captions = _build_supplementary(
-            si,
-            root,
-            full_build,
-            out_dir,
-            result,
-            log,
-            (opened_macros, removed_macros, opened_envs, removed_envs),
-        )
+        si_captions = _build_supplementary(si, root, full_dir, out_dir, result, log, markup)
 
     # 12. alt text, archive, report ------------------------------------------------
     result.alt_text_path = os.path.join(out_dir, ALT_TEXT_NAME)
-    _write(result.alt_text_path, alt_text_draft(main_captions, si_captions))
+    write_text(result.alt_text_path, alt_text_draft(main_captions, si_captions))
 
     if marked_pdf:
         result.marked_pdf_path, result.sm_marked_pdf_path = _build_marked(
@@ -703,63 +354,8 @@ def build_jcp_source(
         result.zip_path = make_zip(source_dir, os.path.join(out_dir, ZIP_NAME))
 
     result.report_path = os.path.join(out_dir, REPORT_NAME)
-    _write(result.report_path, render_report(result))
+    write_text(result.report_path, render_report(result))
     return result
-
-
-def _report_verification(verified, result):
-    for error in verified.log.errors[:10]:
-        result.add(ERROR, "verify", f"pdflatex: {error}")
-    for reference in verified.log.undefined_references:
-        result.add(ERROR, "verify", f"undefined reference: {reference}")
-    for citation in verified.log.undefined_citations:
-        result.add(ERROR, "verify", f"undefined citation: {citation}")
-    for missing in verified.log.missing_files:
-        result.add(ERROR, "verify", f"missing file: {missing}")
-    if verified.log.undefined_summary and not (
-        verified.log.undefined_references or verified.log.undefined_citations
-    ):
-        result.add(
-            ERROR, "verify", "LaTeX reported undefined references or citations; see the log"
-        )
-    if not verified.pdf_exists:
-        result.add(ERROR, "verify", "pdflatex produced no PDF from the shipped files")
-    overfull = [
-        amount for amount in verified.log.overfull_pt if amount > OVERFULL_REPORT_THRESHOLD_PT
-    ]
-    if overfull:
-        result.add(
-            WARNING,
-            "verify",
-            f"{len(overfull)} overfull box(es) over {OVERFULL_REPORT_THRESHOLD_PT:.0f}pt, worst "
-            f"{max(overfull):.0f}pt -- something runs past the text width",
-        )
-    if verified.log.rerun_requested:
-        result.add(WARNING, "verify", "LaTeX still asked for another pass after the last run")
-
-
-def _prepare_eps(directory, result):
-    """pdflatex cannot read EPS directly; give it the converted file the journal would make."""
-    eps_files = [name for name in os.listdir(directory) if name.lower().endswith((".eps", ".ps"))]
-    if not eps_files:
-        return
-    if not have_executable("epstopdf"):
-        result.add(
-            WARNING,
-            "figures",
-            "epstopdf is not installed, so the EPS figures could not be converted for the "
-            "verification build; the package itself is unaffected",
-        )
-        return
-    import subprocess
-
-    for name in eps_files:
-        stem = os.path.splitext(name)[0]
-        subprocess.run(
-            ["epstopdf", name, f"--outfile={stem}-eps-converted-to.pdf"],
-            cwd=directory,
-            capture_output=True,
-        )
 
 
 def _build_supplementary(si, root, full_build, out_dir, result, log, markup):
@@ -771,14 +367,10 @@ def _build_supplementary(si, root, full_build, out_dir, result, log, markup):
     si_stem = os.path.splitext(si_name)[0]
     log(f"building supplementary material ({si_name})")
 
-    opened_macros, removed_macros, opened_envs, removed_envs = markup
-    si_text = _read(si_path)
-    si_cleaned, leftovers = clean_markup(
-        si_text, opened_macros, removed_macros, opened_envs, removed_envs
-    )
+    si_cleaned, leftovers = markup.clean(read_text(si_path))
     for leftover in leftovers:
         result.add(ERROR, "sm", f"{leftover} still appears in the supplementary material")
-    _write(os.path.join(full_build, si_name), si_cleaned)
+    write_text(os.path.join(full_build, si_name), si_cleaned)
 
     built = run_latexmk(si_name, full_build)
     for reference in built.log.undefined_references:

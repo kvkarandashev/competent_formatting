@@ -1,12 +1,9 @@
 """``cf_jcp_source``: package a manuscript for a J. Chem. Phys. source upload."""
 
-import sys
-
 import click
 
-from ..processing.jcp_checks import INFO
-from ..processing.jcp_source import JCPSourceError, JCPUsageError, build_jcp_source
-from ..processing.latex_build import MissingExecutableError
+from ..processing.jcp_source import build_jcp_source
+from ._common import markup_options, run_packager
 
 
 @click.command()
@@ -17,24 +14,7 @@ from ..processing.latex_build import MissingExecutableError
     help="Output directory. Must not be the manuscript directory or a parent of it.",
 )
 @click.option("--si", default=None, help="Supplementary material .tex; built to a PDF only.")
-@click.option(
-    "--opened_macro",
-    multiple=True,
-    help="Revision macro whose content is kept: \\NAME{text} -> text. Repeatable.",
-)
-@click.option(
-    "--removed_macro",
-    multiple=True,
-    help="Comment macro dropped with its content: \\NAME{text} -> ''. Repeatable.",
-)
-@click.option(
-    "--opened_env",
-    multiple=True,
-    help="Revision environment whose body is kept: \\begin{NAME}x\\end{NAME} -> x. Repeatable.",
-)
-@click.option(
-    "--removed_env", multiple=True, help="Environment dropped with its body. Repeatable."
-)
+@markup_options
 @click.option(
     "--bbl",
     type=click.Choice(["inline", "separate"]),
@@ -82,8 +62,8 @@ def main(
     directory, the author-generated PDF built from exactly those files, a draft alt-text file
     and a report. Exits 1 if a hard check failed, 2 on a usage error.
     """
-    try:
-        result = build_jcp_source(
+    run_packager(
+        lambda: build_jcp_source(
             main_tex,
             out,
             si=si,
@@ -99,26 +79,6 @@ def main(
             make_archive=make_archive,
             force=force,
             log=lambda message: click.echo(f"  {message}"),
-        )
-    except (JCPUsageError, MissingExecutableError) as error:
-        click.echo(str(error), err=True)
-        sys.exit(2)
-    except JCPSourceError as error:
-        click.echo(str(error), err=True)
-        sys.exit(1)
-
-    for check in result.checks:
-        if check.level != INFO:
-            click.echo(check.render())
-    click.echo("")
-    click.echo(f"wrote {result.out_dir}")
-    click.echo(f"  report: {result.report_path}")
-
-    failures = len(result.hard_failures)
-    warnings = len(result.warnings)
-    click.echo(f"{failures} hard failure(s), {warnings} warning(s)")
-    if failures:
-        sys.exit(1)
-    if strict and warnings:
-        click.echo("--strict: warnings count as failures", err=True)
-        sys.exit(1)
+        ),
+        strict,
+    )

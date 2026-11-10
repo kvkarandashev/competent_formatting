@@ -11,9 +11,11 @@ stripping deletes or shortens lines but never joins them (see
 :func:`..latex_spans.strip_comments_by_line`), so every output line can be traced back to one
 ``(file, line)`` pair, through any depth of ``\\input``.
 
-``\\input`` substitution is in-place, exactly as TeX does it: text before the macro and the
-first line of the inlined file share an output line, and so do the inlined file's last line
-and whatever followed the macro. Anything else would insert spaces the author did not write.
+``\\input`` substitution is in-place: text before the macro and the first line of the inlined
+file share an output line, and so do the inlined file's last line and whatever followed the
+macro. The inlined file's line end is still a space to TeX, though, and the rest of the
+``\\input`` line is read after it, so the flat text has to say so: a table in ``\\centering``
+sits half a space off otherwise. See :meth:`_LineAccumulator.end_of_input`.
 """
 
 import os
@@ -22,24 +24,34 @@ from collections import namedtuple
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from .latex_spans import code_spans, iter_spans, skip_balanced_group, strip_comments_by_line
+from .latex_spans import (
+    code_spans,
+    comment_spans,
+    iter_spans,
+    skip_balanced_group,
+    strip_comments_by_line,
+)
 
 Origin = namedtuple("Origin", ["path", "line"])
 
 TEX_EXTENSION = ".tex"
 
+# A space token that survives where a literal space would not: TeX drops spaces at the end of a
+# line and collapses runs of them. As a control word it also swallows what follows it.
+SPACE_TOKEN = "\\space"
+
 # Extensions pdflatex tries, in its own order, when \includegraphics names no extension.
 GRAPHICS_EXTENSIONS = (".pdf", ".png", ".jpg", ".jpeg", ".eps", ".ps", ".tif", ".tiff")
 
-# Inlining these would need information the flat file cannot carry: another document's .aux,
-# or a search path resolved at compile time. Failing loudly beats shipping a file that
-# silently lost a section.
+# Inlining these would need a search path resolved at compile time. Failing loudly beats
+# shipping a file that silently lost a section. (\externaldocument is not on the list: it
+# reads another document's .aux rather than inlining text, so it survives flattening and is
+# for the packager to resolve or refuse -- see external_labels.py.)
 UNSUPPORTED_MACROS = {
     "subfile": "\\subfile (the subfiles package) -- inline it by hand first",
     "import": "\\import (the import package) -- inline it by hand first",
     "subimport": "\\subimport (the import package) -- inline it by hand first",
     "InputIfFileExists": "\\InputIfFileExists -- replace it with a plain \\input",
-    "externaldocument": "\\externaldocument -- the main file cannot reference another document",
 }
 
 _MACRO_CALL = re.compile(r"\\([a-zA-Z@]+)\*?")
@@ -80,19 +92,66 @@ class _LineAccumulator:
         self.origins = []
         self._open = None
         self._open_origin = None
+        self._pending_spaces = 0  # space tokens owed since an inlined file ended
+        self._line_continued = False  # the next line still belongs to an \\input's line
 
-    def write(self, text, origin):
-        # An empty write must not claim the line: the text before an \input is empty
-        # whenever the macro starts the line, and the line then belongs to the file being
-        # inlined, not to the one holding the \input.
-        if not text:
-            return
+    def _append(self, text, origin):
         if self._open is None:
             self._open = []
             self._open_origin = origin
         self._open.append(text)
 
+    def _flush_spaces(self, origin, at_line_end=False):
+        count = self._pending_spaces
+        if at_line_end and (count or self._line_continued):
+            count += 1  # this line's own end, which the control word below would swallow
+        self._pending_spaces = 0
+        self._line_continued = False
+        if not count:
+            return
+        if self._open is None:
+            spaces = SPACE_TOKEN * count  # a literal space opening a line would be skipped
+        else:
+            spaces = " " + SPACE_TOKEN * (count - 1)
+        if not at_line_end and spaces != " ":
+            spaces += " "  # ends the control word; TeX discards it
+        self._append(spaces, origin)
+
+    def write(self, text, origin):
+        # An empty write must not claim the line: the text before an \\input is empty
+        # whenever the macro starts the line, and the line then belongs to the file being
+        # inlined, not to the one holding the \\input.
+        if not text:
+            return
+        self._flush_spaces(origin)
+        self._append(text, origin)
+
+    def write_after_input(self, text, origin):
+        """Write what follows an ``\\input`` on its line: a leading space there is a token."""
+        if text[:1] in (" ", "\t"):
+            self._pending_spaces += 1
+            text = text.lstrip(" \t")
+        self.write(text, origin)
+
+    def end_of_input(self, last_line, origin):
+        """Account for the line end of an inlined file, whose last line was ``last_line``.
+
+        TeX reads it before returning to the ``\\input`` line, so what it produced has to come
+        before the rest of that line. An empty file (``last_line`` is ``None``) has no line
+        end. One ending in a comment swallows it, and one ending in a blank line has a paragraph
+        break there; either way the output line must end here, and the rest of the ``\\input``
+        line must not be read as a comment or as a second blank line.
+        """
+        if last_line is None:
+            return
+        if comment_spans(last_line) or not last_line.strip():
+            self.newline(origin)
+            self._line_continued = True
+        else:
+            self._pending_spaces += 1
+
     def newline(self, origin):
+        self._flush_spaces(origin, at_line_end=True)
         if self._open is None:
             self._open = []
             self._open_origin = origin
@@ -203,7 +262,11 @@ def _flatten_file(path, root, accumulator, keep_comments, stack, inputs):
                 # The call was cut off by comment stripping (it sat inside a comment that
                 # began earlier on the line); nothing to inline.
                 continue
-            accumulator.write(content[cursor:column_start], origin)
+            fragment = content[cursor:column_start]
+            if cursor:
+                accumulator.write_after_input(fragment, origin)
+            else:
+                accumulator.write(fragment, origin)
             target = resolve_input(argument, root, os.path.dirname(path))
             if target is None:
                 raise FlattenError(
@@ -217,14 +280,21 @@ def _flatten_file(path, root, accumulator, keep_comments, stack, inputs):
                 # author had rather than silently reflowing the document.
                 accumulator.write("\\clearpage", origin)
                 accumulator.newline(origin)
-            _flatten_file(target, root, accumulator, keep_comments, stack, inputs)
+            last_line = _flatten_file(target, root, accumulator, keep_comments, stack, inputs)
             if name == "include":
                 accumulator.newline(origin)
                 accumulator.write("\\clearpage", origin)
+            else:
+                accumulator.end_of_input(last_line, origin)
             cursor = column_end
-        accumulator.write(content[cursor:], origin)
+        if cursor:
+            # TeX drops spaces at the end of a line, so only what precedes real text counts.
+            accumulator.write_after_input(content[cursor:].rstrip(" \t"), origin)
+        else:
+            accumulator.write(content[cursor:], origin)
         if index < len(lines) - 1:
             accumulator.newline(origin)
+    return lines[-1][1] if lines else None
 
 
 def _plain_lines(text):

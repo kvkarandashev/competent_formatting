@@ -215,3 +215,15 @@ def packaged(tmp_path_factory):
         opened_envs=["revblock"],
         marked_pdf=True,
     )
+
+
+@pytest.fixture(scope="module")
+def compiled_project(tmp_path_factory):
+    """The manuscript directory with a real figure, for tests that compile it."""
+    if not have_tex():
+        pytest.skip("needs a TeX installation with revtex4-2")
+    root = tmp_path_factory.mktemp("project")
+    write_manuscript(root)
+    if not compile_figure(root):
+        pytest.skip("could not compile the test figure")
+    return root

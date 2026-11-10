@@ -1,13 +1,15 @@
 # competent_formatting — agent guide
 
 `competent_formatting` builds **LaTeX tables** (and helps with figures) from Python data, with
-careful number formatting and phantom-based column alignment, and ships three LaTeX tools:
+careful number formatting and phantom-based column alignment, and ships LaTeX tools:
 `cf_quick_table_view`, which compiles one generated table on its own, `cf_view`, a local web
-viewer that recompiles whole documents on demand, and `cf_jcp_source`, which turns a working
-manuscript into a journal-ready source package. This file documents the areas most often
-touched: the **number/float formatters**, the **table-making tools**, **rendering a table to
-preview or width-check it**, the **source-processing layer**, the **submission packager**, and
-the **viewer**.
+viewer that recompiles whole documents on demand, `cf_macro_removal` and `cf_flatten`, which
+strip revision markup from / inline the `\input`s of a `.tex`, and two packagers built on them:
+`cf_jcp_source`, which turns a working manuscript into a journal-ready source package, and
+`cf_arxiv_source`, which turns one or more documents into an arXiv upload. This file
+documents the areas most often touched: the **number/float formatters**, the **table-making
+tools**, **rendering a table to preview or width-check it**, the **source-processing layer**,
+the **submission packagers**, and the **viewer**.
 
 ## Dev workflow (read first)
 
@@ -301,6 +303,8 @@ compiled. The import graph is acyclic and `latex_spans` is the root:
   removed_fields=, opened_envs=, removed_envs=)`. **Macros and environments both**, each
   either *opened* (markup goes, content stays) or *removed* (both go), with the
   `\newcommand`/`\newenvironment` that defines a stripped name dropped along with it.
+  `clean_markup` wraps it with the proof that nothing is left (`leftover_markup`); every
+  command that strips markup goes through it.
 - `flatten.py` — inlines `\input`/`\include` into one file **with provenance**: every output
   line knows the `(file, line)` it came from, through any depth of inclusion. Also finds and
   renames graphics.
@@ -309,7 +313,21 @@ compiled. The import graph is acyclic and `latex_spans` is the root:
 - `latex_build.py` — running pdflatex/latexmk and parsing the log. Shared with
   `table_rendering.py` (overfull boxes) and `viewer/builds.py` (the build-status rule below),
   so there is one copy of each.
-- `jcp_source.py` / `jcp_checks.py` — the submission packager and its checks (next section).
+- `external_labels.py` — resolves `\externaldocument` (xr/xr-hyper) ahead of time: the call
+  is replaced by the prefixed `\newlabel`s it would have read, from the referenced document's
+  `.aux`, hyperref anchors blanked (see `cf_arxiv_source` below).
+- `source_package.py` — **the pipeline steps both packagers share**: `prepare_out_dir`,
+  `copy_project`, `flatten_and_clean`/`prepare_document`, `full_build`, `collect_figures`
+  (recipient-specific vetting passed in as `check_figure`), `splice_bibliography`,
+  `ship_local_styles`, `verify_in_isolation`, `make_zip`, `render_report`, and the
+  `SourcePackageResult` base class (`report_header`/`report_footer` are the per-packager
+  parts of `report.md`). Fix a step here and both packagers get it; a packager-specific
+  module should only add policy.
+- `jcp_source.py` / `jcp_checks.py` — the JCP packager and its checks (AIP policy on top of
+  `source_package`). `JCPSourceError`/`JCPUsageError` are aliases of
+  `SourcePackageError`/`SourcePackageUsageError`, and the bibliography helpers are
+  re-exported, so the pre-split import paths still work.
+- `arxiv_source.py` — the arXiv packager (section below).
 
 ### Environments are first-class revision markup
 
@@ -321,9 +339,34 @@ places that strip markup:
 | | macro | environment |
 |---|---|---|
 | `remove_macros` | `opened_fields` / `removed_fields` | `opened_envs` / `removed_envs` |
-| `cf_macro_removal` | `--opened_fields` / `--removed_fields` (colon-separated) | `--opened_envs` / `--removed_envs` |
+| `cf_macro_removal` | `--opened_macro` / `--removed_macro`, or colon-separated `--opened_fields` / `--removed_fields` | `--opened_env` / `--removed_env`, or `--opened_envs` / `--removed_envs` |
 | `cf_view` | `--opened_macro` / `--removed_macro` | `--opened_env` / `--removed_env` |
-| `cf_jcp_source` | `--opened_macro` / `--removed_macro` | `--opened_env` / `--removed_env` |
+| `cf_flatten`, `cf_jcp_source`, `cf_arxiv_source` | `--opened_macro` / `--removed_macro` | `--opened_env` / `--removed_env` |
+
+The four repeatable options are defined once, in `bin/_common.py` (`markup_options`), and
+every command except `cf_view` uses that definition. `cf_macro_removal` and `cf_flatten` exit
+1 when a listed name survives the cleaning, as the packagers do.
+
+### `cf_flatten`
+
+```bash
+cf_flatten main.tex -o flat.tex [--strip_comments] [--opened_macro rev ...]
+```
+
+Inlines `\input`/`\include` recursively (paths against the file's directory, as TeX does),
+optionally drops comments and strips markup; stdout without `-o`. Figures, the bibliography
+and `\externaldocument` are left alone -- those are the packagers' business. Unlike the
+packagers it keeps comments unless told otherwise, since it is a text tool, not a submission.
+
+An inlined file's line end is a space to TeX, read *before* the rest of the `\\input` line, so
+`\\input{table}` alone on a line produces two space tokens. The flat text keeps both: a literal
+space cannot (TeX drops spaces at a line end and collapses runs), so the output reads
+`\\end{tabular} \\space`. Dropping it moves a table in `\\centering` by half a space. Known gap:
+the plain `\\input file` form gets one space too many, since its terminator is consumed by TeX.
+
+`\\begin`/`\\end` of an opened environment, alone on a line, take the line with them: a line left
+blank would be a paragraph break. The direct build also gets a stray space from such a line,
+visible only at the start of a line or in a justified one; that one is deliberately not kept.
 
 A macro and an environment can share a name and are stripped differently, so the viewer's
 session config keys a transform on the **pair** (`kind`, name); `Transform` is a union
@@ -404,6 +447,48 @@ or a parent of it.
 AIP prefers EPS for accepted manuscripts, so an `.eps` is shipped as-is. pdflatex cannot read
 it directly, so the isolated verification build converts it with `epstopdf` first (and warns
 if `epstopdf` is missing). The shipped package is unaffected either way.
+
+## `cf_arxiv_source` — an arXiv upload
+
+```bash
+cf_arxiv_source main.tex sm.tex --out arxiv_submission \
+    --opened_macro rev --opened_env revblock \
+    [--figure_prefix fig --figure_prefix sfig] [--anc data.zip]
+```
+
+```
+arxiv_submission/
+├── source/          # upload the contents (or source.zip): main.tex, sm.tex, figures,
+│                    #   00README.json, anc/ (with --anc)
+├── source.zip
+├── main.pdf, sm.pdf # each compiled from source/ in isolation
+├── report.md
+└── build/
+```
+
+The TEX_FILES are **top-level documents, in PDF order**. arXiv compiles each on its own and
+concatenates the PDFs in the order `00README.json` gives
+(https://info.arxiv.org/help/00README.html); the tool writes that file (`--no-readme` to
+skip). Each document goes through the shared pipeline -- flatten, strip markup, latexmk
+build for the `.bbl`, figures renamed (`fig` for the first document, `<stem>_fig` for the
+rest unless `--figure_prefix` is given once per document), bibliography inlined -- and the
+result is verified with pdflatex alone in an empty directory, every document in order.
+
+Differences from `cf_jcp_source`, all deliberate:
+
+- **`\externaldocument` is resolved, not refused.** arXiv drops `xr` links between top-level
+  files ("the external file will be lost"), so `external_labels.py` replaces the call with
+  the referenced document's labels, taken from the `.aux` of its *cleaned* full build. Every
+  route to a label keeps working (`\ref`, `\eqref`, `\pageref`, author macros such as
+  `\appref`) because call sites are not rewritten. Anchors are blanked: they name
+  destinations in the other PDF, and left in place would link to whatever this PDF has under
+  the same name; blank, hyperref prints the number unlinked. The referenced document must be
+  one of the packaged ones -- otherwise it is a hard failure.
+- **UTF-8 is kept** (arXiv's pdflatex reads it); `--ascii` restores the JCP normalisation.
+- **No AIP checks** (figure fonts and sizes, required sections, prose lint). The hard checks
+  are the shared ones: markup left over, unresolved `\externaldocument`, and anything the
+  isolated build reports. A `source/` over 50 MB is a warning.
+- **Comments are still stripped by default**: arXiv serves the source to anyone.
 
 ## `viewer/` — the `cf_view` web viewer
 

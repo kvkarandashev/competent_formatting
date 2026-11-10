@@ -25,6 +25,19 @@ def clean(text, **kwargs):
     return remove_macros(text, **kwargs)
 
 
+@pytest.mark.parametrize(
+    "source,expected",
+    [
+        ("a\n\\begin{revblock}\nb\n\\end{revblock}\nc\n", "a\nb\nc\n"),
+        ("a\n\n\\begin{revblock}\n\nb\n\n\\end{revblock}\n\nc\n", "a\n\n\nb\n\n\nc\n"),
+        ("a\n  \\begin{revblock}  \nb\n\\end{revblock}\nc", "a\n  b\nc"),
+        ("a \\begin{revblock}\nb\n\\end{revblock} c\n", "a \nb\n c\n"),
+    ],
+)
+def test_a_delimiter_alone_on_its_line_leaves_no_blank_line(source, expected):
+    assert clean(source, opened_envs=["revblock"]) == expected
+
+
 def test_an_opened_environment_keeps_its_body():
     source = r"before \begin{revblock}kept\end{revblock} after"
     assert clean(source, opened_envs=["revblock"]) == "before kept after"
