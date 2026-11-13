@@ -26,6 +26,7 @@ code { background: #00000038; padding: 0 3px; border-radius: 3px; }
 .group { display: inline-flex; gap: 4px; align-items: center; }
 .sep { width: 1px; height: 18px; background: var(--line); }
 .spacer { flex: 1; }
+.label { color: var(--dim); }
 .status { color: var(--dim); }
 .status.ok { color: var(--ok); } .status.warning { color: var(--warn); }
 .status.failed { color: var(--fail); } .status.busy { color: var(--accent); }

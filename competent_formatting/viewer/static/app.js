@@ -457,13 +457,17 @@ function wireControls() {
     UI.scale = Math.min(3, UI.scale + 0.15); renderBar(); await reloadPdf(); };
   $("zoom-out").onclick = async () => {
     UI.scale = Math.max(0.3, UI.scale - 0.15); renderBar(); await reloadPdf(); };
-  $("toggle-native").onclick = async () => {
-    UI.native = !UI.native;
-    $("toggle-native").classList.toggle("active", UI.native);
+  const setView = async (native) => {
+    if (native === UI.native) return;
+    UI.native = native;
+    $("view-canvas").classList.toggle("active", !native);
+    $("view-native").classList.toggle("active", native);
     // Zoom is the canvas renderer's; in native mode the browser owns it.
-    for (const id of ["zoom-in", "zoom-out"]) $(id).disabled = UI.native;
-    await renderPdf(UI.native ? null : captureAnchor());
+    for (const id of ["zoom-in", "zoom-out"]) $(id).disabled = native;
+    await renderPdf(native ? null : captureAnchor());
   };
+  $("view-canvas").onclick = () => setView(false);
+  $("view-native").onclick = () => setView(true);
 
   $("toggle-log").onclick = () => {
     const panel = $("log-panel");
@@ -515,7 +519,7 @@ function wireControls() {
     }
     if (event.key === "r") postJSON("/api/recompile", { target: "all", current: UI.docId });
     if (event.key === "l") $("toggle-log").click();
-    if (event.key === "t") $("toggle-native").click();
+    if (event.key === "t") $(UI.native ? "view-canvas" : "view-native").click();
   });
 }
 
