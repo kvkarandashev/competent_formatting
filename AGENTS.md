@@ -508,6 +508,24 @@ cf_view --doc main=main.tex --doc si=sd.tex \
 cf_view
 ```
 
+Things to settle when seeding a session for a new project:
+
+- **Compiler.** The default `latex_cmd` is `latexmk -pdf -interaction=nonstopmode -f {main}`
+  (pdfLaTeX). A document that needs XeLaTeX or LuaLaTeX (`fontspec`, system fonts, …) must be
+  seeded with e.g. `--latex_cmd 'latexmk -xelatex -interaction=nonstopmode -f {main}'`, or the
+  first build fails. Keep `-f` (see the build-status rule below) and the `{main}` placeholder.
+- **Commit the session or not — the project decides.** The session directory is designed to be
+  committable (below), but some projects keep it out of version control entirely. Its own
+  `.gitignore` covers only `build/`, `logs/` and the lock file, so `competent_viewer.toml` will
+  appear as untracked; if the project does not want it, add `.cf_view/` to the project's
+  `.gitignore` (or leave it untracked) rather than committing it by accident.
+- **Running it from an agent/non-interactive shell.** `cf_view` blocks while serving, so run it in
+  the background. If the configured port is busy it serves on the next free one, so read the real
+  URL from the `serving N document(s) at http://…` line rather than assuming `:8000`.
+  `--dry_run` writes/validates the config and exits without serving — useful to check a seed.
+  On restart, an explicit flag that contradicts the stored config exits 2 (see "Invariants");
+  either drop the flag or pass `--overwrite_config`. Stop the server by killing that process.
+
 ### Session discovery (`.cf_view`)
 
 With no `--workdir`, `cf_view` walks up from the current directory looking for a `.cf_view/`
@@ -539,7 +557,7 @@ revision markup; `run_manuscript.sh` points it at a real manuscript directory.
   If you add a viewer constant that the CLI needs at import time, it belongs here, not in
   `config.py`.
 - `config.py` — Pydantic models (`SessionConfig`, `Document`, `Profile`, `MacroTransform`,
-  `Hook`) plus atomic TOML load/save. **The config file is the single source of truth**: the CLI
+  `EnvironmentTransform`, `Hook`) plus atomic TOML load/save. **The config file is the single source of truth**: the CLI
   seeds it, the browser menu mutates it, the server reads it. Nothing that must survive a restart
   lives only in memory.
 - `session.py` — seeding a config from CLI flags and `reconcile()`-ing on restart.
@@ -554,23 +572,25 @@ revision markup; `run_manuscript.sh` points it at a real manuscript directory.
 
 ### Profiles and macro semantics
 
-Revision markup is expressed as **macros, not environments** — the only stripping machinery in the
-package is `remove_macros`, which walks `pylatexenc` nodes looking for `LatexMacroNode`s.
-Each declared macro maps onto one of its two existing field lists:
+Revision markup can be a **macro or an environment**; both are stripped by `remove_macros`
+(see "Environments are first-class revision markup" above). Each declared name maps onto one of
+its four field lists:
 
 | CLI flag | `remove_macros` field | Effect |
 |---|---|---|
 | `--opened_macro revised` | `opened_fields` | `\revised{text}` → `text` (content kept) |
 | `--removed_macro collaboratorcomment` | `removed_fields` | `\collaboratorcomment{x}` → `` (content dropped) |
+| `--opened_env revblock` | `opened_envs` | `\begin{revblock}text\end{revblock}` → `text` (body kept) |
+| `--removed_env commentblock` | `removed_envs` | `\begin{commentblock}x\end{commentblock}` → `` (body dropped) |
 
-All declared macros go into **one aggregate `clean` profile**, not one profile per macro, so the UI
-stays a plain `full` ↔ `clean` toggle. `\newcommand` definitions of a stripped macro are dropped
-too (`processed_command_definition` handles that), so the clean copy does not reference an
-undefined macro.
+All declared macros and environments go into **one aggregate `clean` profile**, not one profile
+per name, so the UI stays a plain `full` ↔ `clean` toggle. `\newcommand`/`\newenvironment`
+definitions of a stripped name are dropped too, so the clean copy does not reference an undefined
+macro or environment.
 
 Unwrapping does not change how much text there is, so `full` and `clean` stay aligned page for
-page — which is what makes the toggle useful. Deleting a comment macro *does* reflow the text; that
-is expected, and is why comment macros and revision macros are separate flags.
+page — which is what makes the toggle useful. Deleting a comment *does* reflow the text; that is
+expected, and is why the opened and removed flags are separate.
 
 ### Build-status rule — do not "simplify" this to the exit code
 
