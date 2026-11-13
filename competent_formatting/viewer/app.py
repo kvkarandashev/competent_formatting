@@ -26,6 +26,19 @@ from .worker import CompileWorker, EventBus
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+# The frontend must never be served from a stale cache: StaticFiles sends Last-Modified but no
+# Cache-Control, so a browser may keep an old app.js "fresh" by heuristic for hours after an
+# upgrade, run it against the new index.html, and fail on an element that no longer exists.
+# "no-cache" still caches, but revalidates every time (a cheap 304 via the ETag).
+REVALIDATE = {"Cache-Control": "no-cache"}
+
+
+class RevalidatedStaticFiles(StaticFiles):
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers.update(REVALIDATE)
+        return response
+
 
 class ViewerState:
     """Server-side state: the persisted config plus transient UI/job state."""
@@ -101,7 +114,7 @@ def create_app(state, bus=None, worker=None):
             worker.enqueue_missing()
 
     if STATIC_DIR.is_dir():
-        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+        app.mount("/static", RevalidatedStaticFiles(directory=str(STATIC_DIR)), name="static")
 
     # ------------------------------------------------------------ frontend
 
@@ -110,7 +123,7 @@ def create_app(state, bus=None, worker=None):
         index_path = STATIC_DIR / "index.html"
         if not index_path.is_file():
             raise HTTPException(status_code=500, detail="frontend assets are missing")
-        return HTMLResponse(index_path.read_text(encoding="utf-8"))
+        return HTMLResponse(index_path.read_text(encoding="utf-8"), headers=REVALIDATE)
 
     # ------------------------------------------------------------ state
 
