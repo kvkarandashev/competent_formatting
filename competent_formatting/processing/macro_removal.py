@@ -10,6 +10,15 @@ The walk is over ``pylatexenc`` nodes rather than regexes: ``\\rev{a \\emph{b} c
 brace matching, and a macro the parser does not know (``\\rev`` is not in any package it has a
 spec for) arrives with an empty argument list, with its group following as a sibling node --
 which is why an unknown special macro consumes the *next* node instead of its own argument.
+
+Everything that is not markup is copied **byte for byte**: a node is never re-assembled from
+its parts (``"\\" + macroname + args``), which loses whitespace -- ``\\mathbf J`` came back as
+``\\mathbfJ`` -- but spliced out of the source, with only its descendants replaced.
+
+Definitions of stripped names are removed from the raw text *before* parsing. ``pylatexenc``
+cannot be trusted with them: in ``\\newenvironment{rev}{\\begin{tcolorbox}}{\\end{tcolorbox}}``
+the unpaired ``\\begin`` keeps an environment open past its group's ``}``, the group runs on to
+the end of the file, and the definition is neither recognised nor dropped.
 """
 
 import re
@@ -19,10 +28,17 @@ from pylatexenc.latexwalker import (
     LatexEnvironmentNode,
     LatexGroupNode,
     LatexMacroNode,
+    LatexMathNode,
     LatexWalker,
 )
 
-from .latex_spans import code_spans
+from .latex_spans import (
+    _skip_optional_argument,
+    apply_deletions,
+    code_spans,
+    in_code,
+    skip_balanced_group,
+)
 
 MACRO_DEFINITIONS = ("newcommand", "renewcommand", "providecommand")
 ENVIRONMENT_DEFINITIONS = ("newenvironment", "renewenvironment")
@@ -71,6 +87,73 @@ def defined_name(node):
     return None
 
 
+_DEFINITION = re.compile(
+    r"\\(" + "|".join(MACRO_DEFINITIONS + ENVIRONMENT_DEFINITIONS) + r")(?![a-zA-Z@])\*?"
+)
+_COMMAND_NAME = re.compile(r"\\([a-zA-Z@]+|.)", re.DOTALL)
+
+
+def _skip_space(text, index):
+    while index < len(text) and text[index].isspace():
+        index += 1
+    return index
+
+
+def _definition_extent(text, match):
+    """``(name, end)`` of the definition starting at ``match``, or ``None`` if malformed.
+
+    Brace matching on the raw text, so ``\\begin``/``\\end`` inside the definition's groups are
+    just characters -- which is what they are until the defined environment is used.
+    """
+    defines_environment = match.group(1) in ENVIRONMENT_DEFINITIONS
+    index = _skip_space(text, match.end())
+    if index < len(text) and text[index] == "{":
+        end = skip_balanced_group(text, index)
+        name = text[index + 1 : end - 1].strip()
+        if not defines_environment:
+            command = _COMMAND_NAME.fullmatch(name)
+            if command is None:
+                return None
+            name = command.group(1)
+        index = end
+    elif not defines_environment and text.startswith("\\", index):
+        command = _COMMAND_NAME.match(text, index)
+        if command is None:
+            return None
+        name = command.group(1)
+        index = command.end()
+    else:
+        return None
+    for _ in range(2):  # [number of arguments][default of the first]
+        index = _skip_optional_argument(text, _skip_space(text, index))
+    for _ in range(2 if defines_environment else 1):
+        index = _skip_space(text, index)
+        if index >= len(text) or text[index] != "{":
+            return None
+        index = skip_balanced_group(text, index)
+    return defines_environment, name, index
+
+
+def drop_stripped_definitions(text, macros=(), environments=()):
+    """``text`` less every ``\\newcommand``/``\\newenvironment`` (and re-/provide- variants)
+    that defines one of ``macros``/``environments``; every other definition is left alone."""
+    macros, environments = set(macros), set(environments)
+    if not (macros or environments):
+        return text
+    spans = code_spans(text)
+    deletions = []
+    for match in _DEFINITION.finditer(text):
+        if not in_code(spans, match.start()):
+            continue
+        extent = _definition_extent(text, match)
+        if extent is None:
+            continue
+        defines_environment, name, end = extent
+        if name in (environments if defines_environment else macros):
+            deletions.append((match.start(), end))
+    return apply_deletions(text, deletions)
+
+
 def without_delimiter_lines(node, body):
     """``body`` of an opened environment, less the lines its ``\\begin``/``\\end`` stood alone on.
 
@@ -96,9 +179,23 @@ class ProcessedNodeIterator:
         removed_envs=[],
         opened_envs=[],
         log_list=None,
+        source=None,
+        start=None,
+        end=None,
     ):
-        self.nodes = nodes
+        self.nodes = filter_nodes(nodes)
         self.current_node_id = 0
+        # The iterator emits source[start:end]: each node replaced by its processed output,
+        # and whatever lies between and around the nodes copied verbatim.
+        if source is None and self.nodes:
+            source = self.nodes[0].parsing_state.s
+        self.source = source or ""
+        if start is None:
+            start = self.nodes[0].pos if self.nodes else 0
+        if end is None:
+            end = self.nodes[-1].pos + self.nodes[-1].len if self.nodes else start
+        self.cursor = start
+        self.end = end
         self.removed_fields = set(removed_fields)
         self.opened_fields = set(opened_fields)
         self.removed_envs = set(removed_envs)
@@ -127,7 +224,7 @@ class ProcessedNodeIterator:
     def is_special_env(self, environmentname):
         return self.is_removed_env(environmentname) or environmentname in self.opened_envs
 
-    def child_iterator(self, nodes):
+    def child_iterator(self, nodes, start=None, end=None):
         return ProcessedNodeIterator(
             nodes,
             removed_fields=self.removed_fields,
@@ -135,24 +232,34 @@ class ProcessedNodeIterator:
             removed_envs=self.removed_envs,
             opened_envs=self.opened_envs,
             log_list=self.log_list,
+            source=self.source,
+            start=start,
+            end=end,
         )
 
     def get_full_str(self):
-        return str_merge(self)
+        output = str_merge(self)
+        return output + self.source[self.cursor : self.end]
 
     def get_full_child_str(self, nodes):
-        return self.child_iterator(filter_nodes(nodes)).get_full_str()
+        """The nodes from the first to the last, gaps between them included."""
+        return self.child_iterator(nodes).get_full_str()
 
-    def get_bracketed_full_child_str(self, parent_node, child_nodes, unbracket=False):
-        output = self.get_full_child_str(child_nodes)
-        if (
-            hasattr(parent_node, "delimiters")
-            and parent_node.delimiters is not None
-            and not unbracket
-        ):
-            delims = parent_node.delimiters
-            output = delims[0] + output + delims[1]
-        return output
+    def spliced(self, node, children, start=None, end=None):
+        """``node``'s own source with each of ``children`` replaced by its processed output."""
+        start = node.pos if start is None else start
+        end = node.pos + node.len if end is None else end
+        return self.child_iterator(children, start=start, end=end).get_full_str()
+
+    def spliced_group(self, node, unbracket=False):
+        if not unbracket or node.delimiters is None:
+            return self.spliced(node, node.nodelist)
+        start, end = node.pos, node.pos + node.len
+        if self.source[start : start + len(node.delimiters[0])] == node.delimiters[0]:
+            start += len(node.delimiters[0])
+        if end > start and self.source[end - len(node.delimiters[1]) : end] == node.delimiters[1]:
+            end -= len(node.delimiters[1])
+        return self.spliced(node, node.nodelist, start=start, end=end)
 
     def __iter__(self):
         return self
@@ -185,14 +292,7 @@ class ProcessedNodeIterator:
             # \begin{revblock}[opt] has no meaning once the environment itself is gone.
             body = self.get_full_child_str(current_node.nodelist)
             return without_delimiter_lines(current_node, body)
-        brenvname = "{" + environmentname + "}"
-        return (
-            "\\begin"
-            + brenvname
-            + self.get_full_child_str(current_node.nodelist + argnlist_of(current_node))
-            + "\\end"
-            + brenvname
-        )
+        return self.spliced(current_node, current_node.nodelist + argnlist_of(current_node))
 
     def get_next(self, previous_group_env=None, unbracket=False):
         if self.current_node_id == len(self.nodes):
@@ -203,6 +303,11 @@ class ProcessedNodeIterator:
             raise StopIteration
         current_node = self.nodes[self.current_node_id]
         self.current_node_id += 1
+        gap = self.source[self.cursor : current_node.pos]
+        self.cursor = max(self.cursor, current_node.pos + current_node.len)
+        return gap + self.processed_node(current_node, previous_group_env, unbracket)
+
+    def processed_node(self, current_node, previous_group_env=None, unbracket=False):
         output = None
         if isinstance(current_node, LatexEnvironmentNode):
             output = self.processed_environment(current_node)
@@ -217,21 +322,16 @@ class ProcessedNodeIterator:
                 if len(child_nodes) == 0:
                     contents = self.get_next(previous_group_env=macroname, unbracket=True)
                 else:
-                    assert len(child_nodes) == 1
-                    contents = self.get_bracketed_full_child_str(
-                        current_node, child_nodes, unbracket=True
-                    )
+                    assert len(filter_nodes(child_nodes)) == 1
+                    contents = self.get_full_child_str(child_nodes)
                 if self.is_removed_field(macroname):
                     return ""
                 return contents
-            output = "\\" + macroname
-            if len(child_nodes) != 0:
-                output += self.get_bracketed_full_child_str(current_node, child_nodes)
-            output += current_node.macro_post_space
+            output = self.spliced(current_node, child_nodes)
         if isinstance(current_node, LatexGroupNode):
-            output = self.get_bracketed_full_child_str(
-                current_node, current_node.nodelist, unbracket=unbracket
-            )
+            output = self.spliced_group(current_node, unbracket=unbracket)
+        if isinstance(current_node, LatexMathNode):
+            output = self.spliced(current_node, current_node.nodelist)
 
         if output is None:
             output = current_node.latex_verbatim()
@@ -250,8 +350,15 @@ def remove_macros(latex_str, **kwargs):
     Keyword arguments: ``opened_fields``/``removed_fields`` for macros,
     ``opened_envs``/``removed_envs`` for environments.
     """
+    latex_str = drop_stripped_definitions(
+        latex_str,
+        macros=list(kwargs.get("opened_fields", [])) + list(kwargs.get("removed_fields", [])),
+        environments=list(kwargs.get("opened_envs", [])) + list(kwargs.get("removed_envs", [])),
+    )
     nodes, _, _ = LatexWalker(latex_str).get_latex_nodes()
-    return ProcessedNodeIterator(nodes, **kwargs).get_full_str()
+    return ProcessedNodeIterator(
+        nodes, source=latex_str, start=0, end=len(latex_str), **kwargs
+    ).get_full_str()
 
 
 def leftover_markup(text, macros=(), environments=()):
@@ -265,6 +372,8 @@ def leftover_markup(text, macros=(), environments=()):
         for name in sorted(environments):
             if re.search(r"\\(begin|end)\s*\{" + re.escape(name) + r"\}", chunk):
                 leftovers.append(f"{name} environment")
+            if re.search(r"\\(re)?newenvironment\*?\s*\{\s*" + re.escape(name) + r"\s*\}", chunk):
+                leftovers.append(f"{name} environment definition")
     return sorted(set(leftovers))
 
 
