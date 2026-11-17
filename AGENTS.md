@@ -566,6 +566,11 @@ revision markup; `run_manuscript.sh` points it at a real manuscript directory.
 - `builds.py` — copy → transform → compile, log capture, and the build-status rule.
 - `worker.py` — a single background thread draining an ordered job queue, plus the SSE `EventBus`.
 - `app.py` — FastAPI routes; `bin/view.py` is the thin `click` entry point.
+- `tailscale.py` — read-only detection of the tailnet URL, printed under the `serving …` line:
+  the `tailscale serve`/funnel address that proxies to the bound port, the node name when the
+  bind is a Tailscale IP or a wildcard, or — Tailscale running but nothing routing to the
+  viewer — the `tailscale serve --bg <port>` command that would share it. Stdlib only, never
+  changes the Tailscale config, and prints nothing when Tailscale is absent or stopped.
 - `static/` — the frontend. Shipped via `package-data` in `pyproject.toml`; if you add a file
   there, it is already covered by the `static/*` glob, but **you must `make install` for the
   installed copy to see it** (the usual non-editable-install gotcha).

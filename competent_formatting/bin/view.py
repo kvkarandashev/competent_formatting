@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import click
 from click.core import ParameterSource
 
+from ..viewer import tailscale
 from ..viewer.defaults import DEFAULT_LATEX_CMD, LOCK_FILENAME, VIEW_EXTRA_HINT, WORKDIR_DIRNAME
 
 EXPLICIT_KEYS = {
@@ -231,6 +232,8 @@ def main(
 
     url = f"http://{config.host}:{bind_port}/"
     click.echo(f"serving {len(config.documents)} document(s) at {url}")
+    for line in tailscale.describe(config.host, bind_port):
+        click.echo(f"  {line}")
     click.echo(f"  logs: {workdir_path / 'logs'}")
     click.echo(f"  builds: {workdir_path / 'build'}")
     if config.host != "127.0.0.1":
